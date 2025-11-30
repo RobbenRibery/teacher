@@ -20,7 +20,8 @@ dependencies = [
     "tyro>=0.9.35",
     "torch>=2.8.0",
     "liger-kernel",
-    "accelerate"
+    "accelerate",
+    "flash-attn>=2.8.3"
 ]
 
 [project.optional-dependencies]

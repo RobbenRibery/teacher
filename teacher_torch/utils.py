@@ -1,6 +1,8 @@
 from typing import Optional
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+from liger_kernel.transformers import AutoLigerKernelForCausalLM
 import torch
+import rich
 
 def load_model_tokenizer(
     model_name_or_path: str,
@@ -27,7 +29,7 @@ def load_model_tokenizer(
         model_name_or_path if checkpoint_path is None else checkpoint_path,
         trust_remote_code=trust_remote_code,
         attn_implementation="flash_attention_2",
-        torch_dtype=torch.bfloat16 if bf16 else "auto",
+        dtype=torch.bfloat16 if bf16 else "auto",
         device_map=device_map,
     )
     if freeze_model:
@@ -35,3 +37,16 @@ def load_model_tokenizer(
             param.requires_grad = False
 
     return model, tokenizer
+
+
+if __name__ == "__main__":
+    model, tokenizer = load_model_tokenizer("Qwen/Qwen3-0.6B")
+    rich.print(model)
+    rich.print(tokenizer)
+
+    encoding = tokenizer.encode("Hello, world!", return_tensors="pt").to(model.device)
+    rich.print(encoding)
+
+    output = model.generate(encoding, max_new_tokens=10, do_sample=False)
+    rich.print(output)
+    rich.print(tokenizer.decode(output[0], skip_special_tokens=True))

@@ -214,3 +214,6 @@ outputs/
 wandb/
 mlruns/
 docs
+
+# Flash Attention repo
+flash-attention/
