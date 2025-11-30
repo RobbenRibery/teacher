@@ -3,7 +3,7 @@ name = "teacher"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = "==3.12.*"
 dependencies = [
     "jax",
     "jaxlib",
@@ -18,5 +18,20 @@ dependencies = [
     "google-tunix",
     "pydantic-ai>=1.25.1",
     "tyro>=0.9.35",
-    "torch>=2.9.1",
+    "torch>=2.8.0",
+    "liger-kernel",
+    "accelerate"
 ]
+
+[project.optional-dependencies]
+flash = ["flash-attn>=2.8.3"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["teacher_jax", "teacher_torch"]
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch", "setuptools", "packaging", "ninja"]
