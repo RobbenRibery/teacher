@@ -1,5 +1,5 @@
 [project]
-name = "curious-jax"
+name = "teacher"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -16,4 +16,7 @@ dependencies = [
     "seaborn",
     "scikit-learn",
     "google-tunix",
+    "pydantic-ai>=1.25.1",
+    "tyro>=0.9.35",
+    "torch>=2.9.1",
 ]
