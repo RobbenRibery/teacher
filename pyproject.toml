@@ -1,0 +1,19 @@
+[project]
+name = "curious-jax"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "jax",
+    "jaxlib",
+    "optax",
+    "flax",
+    "transformers",
+    "datasets",
+    "tqdm",
+    "matplotlib",
+    "seaborn",
+    "scikit-learn",
+    "google-tunix",
+]
