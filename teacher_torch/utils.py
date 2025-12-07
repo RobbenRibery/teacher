@@ -1,6 +1,10 @@
 from typing import Optional
-from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
-from liger_kernel.transformers import AutoLigerKernelForCausalLM
+from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, AutoModelForCausalLM
+try:
+    from liger_kernel.transformers import AutoLigerKernelForCausalLM
+    HAS_LIGER = True
+except ImportError:
+    HAS_LIGER = False
 import torch
 import rich
 
@@ -24,12 +28,26 @@ def load_model_tokenizer(
     Returns:
         tuple: A tuple containing the model and its tokenizer.
     """
+    use_cuda = torch.cuda.is_available()
+
+    # Determine attention implementation and model class
+    attn_implementation = "eager"
+    ModelClass = AutoModelForCausalLM
+
+    if use_cuda:
+        major_version, _ = torch.cuda.get_device_capability()
+        if major_version >= 8:
+            attn_implementation = "flash_attention_2"
+        
+        if HAS_LIGER:
+            ModelClass = AutoLigerKernelForCausalLM
+
     tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    model: PreTrainedModel = AutoLigerKernelForCausalLM.from_pretrained(
+    model: PreTrainedModel = ModelClass.from_pretrained(
         model_name_or_path if checkpoint_path is None else checkpoint_path,
         trust_remote_code=trust_remote_code,
-        attn_implementation="flash_attention_2",
-        dtype=torch.bfloat16 if bf16 else "auto",
+        attn_implementation=attn_implementation,
+        torch_dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
         device_map=device_map,
     )
     if freeze_model:
