@@ -36,3 +36,7 @@ packages = ["teacher_jax", "teacher_torch"]
 
 [tool.uv.extra-build-dependencies]
 flash-attn = ["torch", "setuptools", "packaging", "ninja"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
