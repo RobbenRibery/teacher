@@ -37,28 +37,30 @@ class BooleanConstraintsSatisfaction(Task):
     description: str = dedent(
     """
     ## Core task objective:
-    The task is defined by a set of executable boolean constraints.
-    To solve the task, a solver must reason step by step and then write a python function, which determines the numerical value of a variable "x". 
-    The output value of such function must meet the constraints as imposed by the task.
-    The task can have multiple solutions.
+    Any problem belongs to the task is defined by a set of executable boolean constraints about a single variable "x".
+    To solve a problem designed, a student must write Python code to derive a particular value of "x", which meets all constraints imposed.
 
-    ## Ultimate objective from solving the task:
-    The solver must be able to exercise logical reasoning, math and programming skills from solving instances of the task.
+    # Properties of the task:
+    * Any problem designed must be solveable.
+    * The student must be able to exercise sophisticated logical reasoning, math and programming skills to solve problems that you've designed.
     """
     ).strip()
 
     format: str = dedent(
     """
-    Final output for the task creator (only applies for content inside the <answer> tag), must contain a brief description of the function and executable boolean constraints.
+    For each problem created belonging to the task, put your final designed problem inside the <answer> tag. DO NOT provide the solution/any hint. 
     <answer>
-    brief description here... (i.e. Write a python function that outputs the numerical value of a variable "x" which meets the following constraints: ...).
+    Write Python code to derive a particular value of "x" which meets all constraints imposed:
     ```python
-    set of boolean constraints... # example: (x > 0) and (x < 10 or x == 5)
+    constraints = [
+        lambda x: ...,
+        lambda x: ...,
+        ...
+    ]
     ```
     </answer>
     """
     ).strip()
-
 
 TASKS = {
     "boolean_constraints_satisfaction": BooleanConstraintsSatisfaction

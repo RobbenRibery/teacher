@@ -47,9 +47,13 @@ def load_model_tokenizer(
         model_name_or_path if checkpoint_path is None else checkpoint_path,
         trust_remote_code=trust_remote_code,
         attn_implementation=attn_implementation,
-        torch_dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
+        dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
         device_map=device_map,
     )
+    print(f"Model loaded on {model.device}")
+    print(f"Model dtype: {model.dtype}")
+    print(f"Model architecture:\n{model}")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
     if freeze_model:
         for param in model.parameters():
             param.requires_grad = False

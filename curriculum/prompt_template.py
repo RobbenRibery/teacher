@@ -16,8 +16,20 @@ class PromptTemplate(BaseModel):
         ...,
         description="The seed for the task, must contain a 'seed_task' to be filled."
     )
-    def render(self, seed_task: str) -> str:
-        return self.system + "\n\n" + self.task.format(seed_task=seed_task)
+    def render(self, seed_task: str, num_instances: int) -> str:
+        return self.system + "\n\n" + self.task.format(seed_task=seed_task, num_instances=num_instances)
+
+    def prompt(self, seed_task: str, num_instances: int) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": self.system
+            },
+            {
+                "role": "user",
+                "content": self.task.format(seed_task=seed_task, num_instances=num_instances)
+            }
+        ]
 
 
 class TeacherPrompt(PromptTemplate):
@@ -28,13 +40,7 @@ class TeacherPrompt(PromptTemplate):
         default=dedent(
         """
         # Role
-        You are a teacher who is motivated to design diverse and high learning potential curriculums for students, given a particular task. 
-
-        # Thinking Process
-        You think step by step to design the curriculum.
-
-        # Output Format
-        You must put your thinking process inside the <think>\n...\n</think> tag, and the final curriculum should be inside the <answer>\n...\n</answer> tag.
+        You are a professor who's exceptionally skilled at designing diverse problems with high learning potential for students, given the following task.
         """
         ).strip(),
         description="The system prompt for the teacher."
@@ -43,10 +49,10 @@ class TeacherPrompt(PromptTemplate):
     task: str = Field(
         default=dedent(
         """
+        # Task
         {seed_task}
 
-        Now start designing the curriculum which are instances of the task!
-        DO NOT solve the task or provide any hint about the solution.
+        Now design {num_instances} problems originated from the above task.
         """
         ).strip(),
         description="The task prompt for the teacher."
