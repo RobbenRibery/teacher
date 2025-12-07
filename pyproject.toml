@@ -32,7 +32,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["teacher_jax", "teacher_torch"]
+packages = ["teacher_jax", "teacher_torch", "environment", "curriculum"]
 
 [tool.uv.extra-build-dependencies]
 flash-attn = ["torch", "setuptools", "packaging", "ninja"]
