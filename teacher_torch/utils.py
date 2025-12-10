@@ -1,4 +1,5 @@
-from typing import Optional
+import gc
+from typing import Optional, List, Any
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, AutoModelForCausalLM
 try:
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
@@ -7,6 +8,12 @@ except ImportError:
     HAS_LIGER = False
 import torch
 import rich
+
+def release_memory(vars:List[Any]):
+    for var in vars:
+        del var
+    gc.collect()
+    torch.cuda.empty_cache()    
 
 def load_model_tokenizer(
     model_name_or_path: str,
@@ -59,6 +66,27 @@ def load_model_tokenizer(
             param.requires_grad = False
 
     return model, tokenizer
+
+
+def expand_prompts_for_group(prompts: list[str], group_size: int) -> list[str]:
+    """
+    Expand prompts by repeating each prompt group_size times.
+    
+    Useful when you want to manually control batching instead of using
+    num_return_sequences in generation_config.
+    
+    Args:
+        prompts: Original list of prompts.
+        group_size: Number of times to repeat each prompt.
+    
+    Returns:
+        Expanded list where each prompt appears group_size times consecutively.
+    
+    Example:
+        >>> expand_prompts_for_group(["a", "b"], group_size=3)
+        ["a", "a", "a", "b", "b", "b"]
+    """
+    return [p for p in prompts for _ in range(group_size)]
 
 
 if __name__ == "__main__":
