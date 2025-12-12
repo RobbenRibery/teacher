@@ -23,18 +23,13 @@ from typing import List, Optional, Dict, Any, Tuple, Callable
 
 import torch
 from torch import Tensor
-from torch.nn.utils import clip_grad_norm_
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from teacher_torch.experience import Experience
-from teacher_torch.sampling import sample_responses_hf
+from teacher_torch.experience import ExperienceBuffer, Experience
+from teacher_torch.rollout import rollout, RolloutMetric, RolloutConfig
+from teacher_torch.sampling import SamplingOutput
 from teacher_torch.utils import load_model_tokenizer
-from teacher_torch.loss import (
-    grpo_loss,
-    compute_group_advantages,
-    sequences_log_probs,
-    masked_mean,
-)
+from teacher_torch.policy_gradient import update
 from environment.reward import (
     reward_curriculum,
     reward_answer_group,
@@ -67,8 +62,8 @@ class GRPOConfig:
     model_name_or_path: str = "Qwen/Qwen3-0.6B"
     
     # Generation configuration
-    teacher_group_size: int = 4
-    student_group_size: int = 4
+    teacher_group_size: int = 8
+    student_group_size: int = 16
     max_new_tokens: int = 512
     temperature: float = 0.7
     top_p: float = 0.9
@@ -81,6 +76,12 @@ class GRPOConfig:
     # GRPO hyperparameters
     clip_eps: float = 0.2
     kl_beta: float = 0.04
+    normalize_advantages: bool = True
+    solved_threshold: float = 1.0
+
+    # Training loop configuration
+    mini_batch_size: int = 4
+    logits_minibatch_size: int = 128
     
     # Logging configuration
     log_interval: int = 1
@@ -173,16 +174,18 @@ class GRPOTrainer:
             r"<think>.*?</think>.*?<answer>.*?```python\n(.*?)\n```.*?</answer>"
         )
 
-        # generation config
+        # generation config
         self.teacher_generation_config = teacher_generation_config or GenerationConfig(
             max_new_tokens=config.max_new_tokens,
             temperature=1,
             do_sample=True,
+            num_return_sequences=config.teacher_group_size,
         )
         self.student_generation_config = student_generation_config or GenerationConfig(
             max_new_tokens=config.max_new_tokens,
             temperature=1,
             do_sample=True,
+            num_return_sequences=config.student_group_size,
         )
     
     def _build_teacher_prompt(self, seed_task: str) -> str:
@@ -238,349 +241,129 @@ class GRPOTrainer:
     def rollout_teacher(
         self,
         seed_tasks: List[str],
-    ) -> tuple[Experience, list[str]]:
+        teacher_reward_fn: Callable[[SamplingOutput], dict],
+    ) -> tuple[ExperienceBuffer, RolloutMetric]:
         """Execute teacher rollout phase.
         
-        Generates multiple curricula for each seed task. Rewards are
-        computed later after student attempts (see compute_teacher_rewards).
+        Generates multiple curricula for each seed task using the provided
+        reward function.
         
         Args:
             seed_tasks: List of high-level task descriptions.
+            teacher_reward_fn: Callable that takes SamplingOutput and returns
+                a dict with "rewards" key containing a tensor of shape (num_samples,).
         
         Returns:
             Tuple containing:
-                - experience: Experience object (rewards/advantages initially zero).
-                - curriculum_generations: List of raw generation strings.
+                - experience: ExperienceBuffer with generated curricula.
+                - metrics: RolloutMetric containing generation statistics.
         """
         # Build teacher prompts
         prompts = [self._build_teacher_prompt(task) for task in seed_tasks]
         
-        # Generate curricula
-        sampling_output = sample_responses_hf(
+        # Create rollout config
+        rollout_config = RolloutConfig(
+            group_size=self.config.teacher_group_size,
+            seed=self.seed,
+            normalize_advantages=self.config.normalize_advantages,
+        )
+        
+        # Generate curricula using externalized reward function
+        return rollout(
             model=self.model,
             tokenizer=self.tokenizer,
             prompts=prompts,
+            reward_fn=teacher_reward_fn,
             generation_config=self.teacher_generation_config,
-            seed=self.config.seed,
-        )
-        
-        experience = Experience(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            action_mask=action_mask[:, 1:],  # Shift to align with log_probs
-            old_log_probs=old_log_probs,
-            rewards=rewards,
-            advantages=advantages,
+            config=rollout_config,
             role="teacher",
-            texts=completions,
+            solved_threshold=self.config.solved_threshold,
         )
-        
-        return experience, completions
     
     def rollout_student(
         self,
-        curriculum_generations: List[str],
-    ) -> Tuple[Optional[Experience], List[List[AnswerReward]]]:
+        prompts: List[str],
+        student_reward_fn: Callable[[SamplingOutput], dict],
+    ) -> Tuple[ExperienceBuffer, RolloutMetric]:
         """Execute student rollout phase.
         
         For each valid curriculum, generates multiple answer attempts
         and computes rewards using the environment.
         
         Args:
-            curriculum_generations: Raw curriculum generation strings from teacher.
+            prompts: List of student prompts (curricula).
+            student_reward_fn: Reward function for student answers.
         
         Returns:
             Tuple containing:
-                - experience: Experience object with computed rewards/advantages.
-                    None if no valid curricula were generated.
-                - answer_rewards_grouped: List of AnswerReward lists, one per curriculum.
+                - experience: ExperienceBuffer with generated answers.
+                - metrics: RolloutMetric containing generation statistics.
         """
-        from environment.execution import extract_format
-        
-        # Extract valid curricula
-        extracted_curricula: List[Optional[str]] = []
-        valid_indices: List[int] = []
-        
-        for i, gen in enumerate(curriculum_generations):
-            extracted = extract_format(gen, self.format_regex, use_last_match=True)
-            extracted_curricula.append(extracted)
-            if extracted:
-                valid_indices.append(i)
-        
-        if not valid_indices:
-            return None, [[]] * len(curriculum_generations)
-        
-        # Build student prompts for valid curricula
-        prompts: List[str] = []
-        curriculum_to_prompt_idx: Dict[int, int] = {}
-        
-        for prompt_idx, curriculum_idx in enumerate(valid_indices):
-            prompts.append(self._build_student_prompt(curriculum_generations[curriculum_idx]))
-            curriculum_to_prompt_idx[curriculum_idx] = prompt_idx
+        # Format prompts for student (apply chat template)
+        formatted_prompts = [self._build_student_prompt(p) for p in prompts]
+
+        # Create rollout config
+        rollout_config = RolloutConfig(
+            group_size=self.config.student_group_size,
+            seed=self.seed,
+            normalize_advantages=self.config.normalize_advantages,
+        )
         
         # Generate answers
-        input_ids, attention_mask, action_mask, completions = self._generate(
-            prompts,
-            num_samples=self.config.student_group_size,
-        )
-        
-        # Compute behavior policy log probs
-        old_log_probs = self._compute_log_probs(self.model, input_ids, attention_mask)
-        
-        # Compute rewards using environment
-        answer_rewards_grouped: List[List[AnswerReward]] = []
-        all_rewards: List[float] = []
-        
-        completion_idx = 0
-        for curriculum_idx in range(len(curriculum_generations)):
-            if curriculum_idx not in curriculum_to_prompt_idx:
-                answer_rewards_grouped.append([])
-                continue
-            
-            extracted_curriculum = extracted_curricula[curriculum_idx]
-            start = completion_idx * self.config.student_group_size
-            end = (completion_idx + 1) * self.config.student_group_size
-            group_completions = completions[start:end]
-            
-            # Async reward computation
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                group_rewards = loop.run_until_complete(
-                    reward_answer_group(
-                        extracted_curriculum=extracted_curriculum,
-                        answer_generations=group_completions,
-                        format_regex=self.format_regex,
-                    )
-                )
-            finally:
-                loop.close()
-            
-            answer_rewards_grouped.append(group_rewards)
-            all_rewards.extend([r.reward for r in group_rewards])
-            completion_idx += 1
-        
-        rewards = torch.tensor(all_rewards, dtype=torch.float32)
-        
-        # Compute group-relative advantages
-        advantages = compute_group_advantages(
-            rewards,
-            group_size=self.config.student_group_size,
-        )
-        
-        experience = Experience(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            action_mask=action_mask[:, 1:],
-            old_log_probs=old_log_probs,
-            rewards=rewards,
-            advantages=advantages,
+        return rollout(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            prompts=formatted_prompts,
+            reward_fn=student_reward_fn,
+            generation_config=self.student_generation_config,
+            config=rollout_config,
             role="student",
-            texts=completions,
+            solved_threshold=self.config.solved_threshold,
         )
         
-        return experience, answer_rewards_grouped
-    
-    def compute_teacher_rewards(
-        self,
-        curriculum_generations: List[str],
-        answer_rewards_grouped: List[List[AnswerReward]],
-    ) -> Tensor:
-        """Compute teacher rewards based on student performance.
+    def train_step(self, teacher_exp: ExperienceBuffer, student_exp: ExperienceBuffer) -> dict[str, float]:
+        """Perform a single training step with separate updates for student and teacher.
         
-        The teacher reward encourages curricula that are neither too easy
-        nor too hard. Uses uncertainty reward: p(1-p) where p is solve rate.
+        Updates are performed in order:
+        1. Update model using student experience (with KL regularization)
+        2. Update model using teacher experience (with KL regularization)
         
         Args:
-            curriculum_generations: Teacher's raw generation strings.
-            answer_rewards_grouped: Student rewards grouped by curriculum.
-        
-        Returns:
-            Rewards tensor. Shape: (num_curricula,)
-        """
-        rewards: List[float] = []
-        
-        for i, gen in enumerate(curriculum_generations):
-            answer_rewards = (
-                answer_rewards_grouped[i] 
-                if i < len(answer_rewards_grouped) 
-                else []
-            )
+            teacher_exp: Experience buffer from teacher rollout.
+            student_exp: Experience buffer from student rollout.
             
-            if not answer_rewards:
-                rewards.append(0.0)
-                continue
-            
-            curriculum_reward = reward_curriculum(
-                curriculum_generation=gen,
-                answer_group_rewards=answer_rewards,
-                check_format_only=False,
-                format_regex=self.format_regex,
-            )
-            rewards.append(curriculum_reward.reward)
-        
-        return torch.tensor(rewards, dtype=torch.float32)
-    
-    def train_step(
-        self,
-        teacher_experience: Experience,
-        student_experience: Optional[Experience],
-    ) -> Dict[str, float]:
-        """Execute one GRPO training step.
-        
-        Performs gradient updates on both teacher and student experiences
-        using the GRPO objective with PPO clipping and KL regularization.
-        
-        Args:
-            teacher_experience: Experience from teacher rollout.
-            student_experience: Experience from student rollout (may be None).
-        
         Returns:
-            Dictionary of training metrics for logging.
+            Combined metrics from both updates.
         """
-        self.model.train()
+        # Step 1: Update using student experience
+        student_metrics = update(
+            model=self.model,
+            ref_model=self.ref_model,
+            optimizer=self.optimizer,
+            experience=student_exp,
+            config=self.config,
+            device=self.device,
+        )
+        
+        # Step 2: Update using teacher experience
+        teacher_metrics = update(
+            model=self.model,
+            ref_model=self.ref_model,
+            optimizer=self.optimizer,
+            experience=teacher_exp,
+            config=self.config,
+            device=self.device,
+        )
+        
+        # Combine metrics with prefixes
         metrics: Dict[str, float] = {}
-        
-        experiences = [teacher_experience]
-        if student_experience is not None:
-            experiences.append(student_experience)
-        
-        for exp in experiences:
-            if exp.input_ids.shape[0] == 0:
-                continue
+        for key, value in student_metrics.items():
+            metrics[f"student/{key}"] = value
+        for key, value in teacher_metrics.items():
+            metrics[f"teacher/{key}"] = value
             
-            exp = exp.to(self.model.device)
-            
-            for _ in range(self.config.epochs_per_step):
-                self.optimizer.zero_grad()
-                
-                # Compute current policy log probs
-                log_probs, entropy = sequences_log_probs(
-                    self.model,
-                    exp.input_ids,
-                    exp.attention_mask,
-                )
-                
-                # Compute reference policy log probs
-                with torch.no_grad():
-                    ref_log_probs, _ = sequences_log_probs(
-                        self.ref_model,
-                        exp.input_ids,
-                        exp.attention_mask,
-                    )
-                
-                # Compute GRPO loss
-                loss, mean_kl, policy_loss = grpo_loss(
-                    log_probs=log_probs,
-                    old_log_probs=exp.old_log_probs,
-                    ref_log_probs=ref_log_probs,
-                    advantages=exp.advantages,
-                    action_mask=exp.action_mask,
-                    clip_eps=self.config.clip_eps,
-                    kl_beta=self.config.kl_beta,
-                )
-                
-                if not loss.isfinite():
-                    print(f"Warning: Non-finite loss for {exp.role}, skipping")
-                    continue
-                
-                loss.backward()
-                
-                # Gradient clipping
-                grad_norm = clip_grad_norm_(
-                    self.model.parameters(),
-                    max_norm=self.config.max_grad_norm,
-                )
-                
-                self.optimizer.step()
-                
-                # Collect metrics
-                prefix = f"{exp.role}/"
-                metrics[f"{prefix}loss"] = loss.item()
-                metrics[f"{prefix}policy_loss"] = policy_loss.item()
-                metrics[f"{prefix}mean_kl"] = mean_kl.item()
-                metrics[f"{prefix}grad_norm"] = (
-                    grad_norm.item() if isinstance(grad_norm, Tensor) else grad_norm
-                )
-                metrics[f"{prefix}mean_entropy"] = masked_mean(
-                    entropy, exp.action_mask, dim=-1
-                ).item()
-                metrics[f"{prefix}mean_reward"] = exp.rewards.mean().item()
-        
         return metrics
-    
-    def train(
-        self,
-        seed_task:str,
-        num_steps: int = 100,
-        logger: Optional[Callable[[Dict[str, Any]], None]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Run the main GRPO training loop.
-        
-        Alternates between:
-        1. Teacher generating curricula
-        2. Student solving curricula
-        3. Computing rewards
-        4. GRPO optimization step
-        
-        Args:
-            seed_tasks: List of seed task descriptions for curriculum generation.
-            num_steps: Total number of training steps.
-            logger: Optional callback for logging metrics (e.g., wandb.log).
-        
-        Returns:
-            List of metrics dictionaries, one per training step.
-        """
-        all_metrics: List[Dict[str, Any]] = []
-        
-        for step in range(num_steps):
-            print(f"\n=== Step {step + 1}/{num_steps} ===")
-            
-            # Select seed task(s) for this step
-            step_seed_tasks = seed_task
-            
-            # Phase 1: Teacher generates curricula
-            print("Teacher generating curricula...")
-            teacher_exp, curriculum_generations = self.rollout_teacher(seed_tasks=step_seed_tasks)
-            
-            # Phase 2: Student solves curricula
-            print("Student solving curricula...")
-            student_exp, answer_rewards_grouped = self.rollout_student(
-                curriculum_generations
-            )
-            
-            # Phase 3: Compute teacher rewards from student performance
-            print("Computing teacher rewards...")
-            teacher_rewards = self.compute_teacher_rewards(
-                curriculum_generations,
-                answer_rewards_grouped,
-            )
-            teacher_exp.rewards = teacher_rewards
-            teacher_exp.advantages = compute_group_advantages(
-                teacher_rewards,
-                group_size=self.config.teacher_group_size,
-            )
-            
-            # Phase 4: GRPO optimization
-            print("Training...")
-            metrics = self.train_step(teacher_exp, student_exp)
-            
-            # Add step-level metrics
-            metrics["step"] = step + 1
-            metrics["teacher/mean_reward"] = teacher_rewards.mean().item()
-            if student_exp is not None:
-                metrics["student/mean_reward"] = student_exp.rewards.mean().item()
-            
-            all_metrics.append(metrics)
-            
-            # Logging
-            if step % self.config.log_interval == 0:
-                print(f"Metrics: {metrics}")
-                if logger:
-                    logger(metrics)
-        
-        return all_metrics
-    
+
     def update_reference_model(self) -> None:
         """Update reference model to current model weights.
         
@@ -591,6 +374,78 @@ class GRPOTrainer:
         self.ref_model.eval()
         for param in self.ref_model.parameters():
             param.requires_grad = False
+    
+    def train(
+        self,
+        seed_tasks: List[str],
+        num_steps: int = 100,
+        teacher_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
+        student_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
+        logger: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Run the main GRPO training loop.
+        
+        Alternates between:
+        1. Teacher generating curricula
+        2. Student solving curricula
+        3. GRPO optimization step
+        
+        Args:
+            seed_tasks: List of seed task descriptions for curriculum generation.
+            num_steps: Total number of training steps.
+            teacher_reward_fn: Reward function for teacher rollout.
+            student_reward_fn: Reward function for student rollout.
+            logger: Optional callback for logging metrics (e.g., wandb.log).
+        
+        Returns:
+            List of metrics dictionaries, one per training step.
+        """
+        all_metrics: List[Dict[str, Any]] = []
+        
+        for step in range(num_steps):
+            print(f"\n=== Step {step + 1}/{num_steps} ===")
+            
+            # Phase 1: Teacher generates curricula
+            print("Teacher generating curricula...")
+            teacher_exp, teacher_metrics = self.rollout_teacher(
+                seed_tasks=seed_tasks,
+                teacher_reward_fn=teacher_reward_fn,
+            )
+            
+            # Extract generated curricula (completions from teacher)
+            curriculum_generations = []
+            for exp in teacher_exp.experiences:
+                curriculum_generations.extend(exp.completion)
+            
+            # Phase 2: Student solves curricula
+            print("Student solving curricula...")
+            student_exp, student_metrics = self.rollout_student(
+                prompts=curriculum_generations,
+                student_reward_fn=student_reward_fn,
+            )
+            
+            # Phase 3: GRPO optimization
+            print("Training...")
+            metrics = self.train_step(teacher_exp, student_exp)
+        
+            # Add step-level metrics from rollout
+            metrics["step"] = step + 1
+            metrics["teacher/mean_reward"] = teacher_metrics.mean_reward
+            metrics["teacher/std_reward"] = teacher_metrics.std_reward
+            metrics["teacher/mean_entropy"] = teacher_metrics.mean_entropy
+            metrics["student/mean_reward"] = student_metrics.mean_reward
+            metrics["student/std_reward"] = student_metrics.std_reward
+            metrics["student/mean_entropy"] = student_metrics.mean_entropy
+            
+            all_metrics.append(metrics)
+            
+            # Logging
+            if step % self.config.log_interval == 0:
+                print(f"Metrics: {metrics}")
+                if logger:
+                    logger(metrics)
+        
+        return all_metrics
 
 
 def main() -> None:

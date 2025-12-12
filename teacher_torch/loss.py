@@ -283,7 +283,7 @@ def sequences_log_probs(
     attention_mask: torch.Tensor,
     return_entropy: bool = True,
     logits_minibatch_size: int = 128,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
+) -> tuple[torch.Tensor, torch.Tensor | None]: 
     """
     Computes the log probabilities of the output ids from the logits.
 

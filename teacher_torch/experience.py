@@ -26,6 +26,7 @@ class Experience:
     learnability: torch.FloatTensor # (num_samples, )
     prompt: str
     completion: list[str]
+    role:str
 
     kl: Optional[torch.Tensor]  = None # (num_samples * group_size, seq_len-1) (boolean)
     log_probs_ref: Optional[torch.Tensor] = None # (num_samples * group_size, seq_len-1)
@@ -43,7 +44,8 @@ class Experience:
 @dataclass
 class ExperienceBuffer:
     """
-    A buffer of experiences.
+    A buffer of experiences. 
+    Each instance represent a grouped rollout for a single instruction/prompt.
     """
     experiences: list[Experience]
 
@@ -59,9 +61,32 @@ class ExperienceBuffer:
     def append(self, experience: Experience):
         self.experiences.append(experience)
 
+    def extend(self, other: ExperienceBuffer | list[Experience]):
+        if isinstance(other, ExperienceBuffer):
+            self.experiences.extend(other.experiences)
+        else:
+            self.experiences.extend(other)
+
+    def __iter__(self):
+        return iter(self.experiences)
+
+    def to(self, device: torch.device) -> Self:
+        """Move all experiences in the buffer to the specified device.
+        
+        Args:
+            device: Target device to move tensors to.
+        
+        Returns:
+            New ExperienceBuffer with all experiences moved to the device.
+        """
+        return ExperienceBuffer(
+            experiences=[exp.to(device) for exp in self.experiences]
+        )
+
     @classmethod
     def from_sampling_output(
         cls,
+        role: str,
         sampling_output: "SamplingOutput",
         pad_token_id: int,
         action_log_probs: torch.FloatTensor,
@@ -70,7 +95,7 @@ class ExperienceBuffer:
         group_size: int,
         learnability: torch.FloatTensor,
         prompt: list[str],
-        completions: list[list[str]],
+        completions: list[str],
         solved_threshold: float = 1.0,
     ) -> Self:
         """
@@ -83,9 +108,9 @@ class ExperienceBuffer:
             rewards: Scalar rewards for each sample, shape (batch_size,).
             advantages: Group-normalized advantages, shape (batch_size,).
             group_size: Number of samples per prompt.
-            learnability: Learnability scores per prompt, shape (batch_size,).
-            prompt: List of prompt strings, length = num_samples
-            completions: List of completion lists, length = batch_size  
+            learnability: Learnability scores per sample, shape (batch_size,).
+            prompt: List of prompt strings, length = num_samples (number of groups)
+            completions: List of completion strings, length = batch_size (total number of samples)  
             solved_threshold: Threshold for determining if a task is solved.
         
         Returns:
@@ -147,6 +172,7 @@ class ExperienceBuffer:
             group_completions = completions[start_idx:end_idx]
             
             experience = Experience(
+                role=role,
                 pad_token_id=pad_token_id,
                 sequences=group_sequences.to("cpu"),
                 attention_mask=group_attention_mask.to("cpu"),
