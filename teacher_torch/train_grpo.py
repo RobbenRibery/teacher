@@ -583,7 +583,7 @@ def main(args: CliArgs = tyro.cli(CliArgs)) -> None:
         kl_beta=args.kl_beta,
         normalize_advantages=args.normalize_advantages,
         solved_threshold=args.solved_threshold,
-        mini_batch_size=args.mini_batch_size,å
+        mini_batch_size=args.mini_batch_size,
         logits_minibatch_size=args.logits_minibatch_size,
         log_interval=args.log_interval,
     )
