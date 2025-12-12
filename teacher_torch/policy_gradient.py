@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import List, Dict, TYPE_CHECKING
+from typing import List, dict
+from dataclasses import dataclass
 import torch
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
@@ -8,10 +9,41 @@ from torch.nn.functional import pad
 from teacher_torch.experience import Experience, ExperienceBuffer
 from teacher_torch.loss import sequences_log_probs, grpo_loss
 
-if TYPE_CHECKING:
-    from torch.optim import Optimizer
-    from torch.nn import Module
-    from teacher_torch.train_grpo import GRPOConfig
+from torch.optim import Optimizer
+from torch.nn import Module
+from teacher_torch.train_grpo import GRPOConfig
+
+
+@dataclass
+class TrainingMetrics:
+    """Metrics collected during a training update step.
+    
+    Attributes:
+        loss: Average loss across all batches.
+        mean_kl: Average KL divergence from reference policy.
+        policy_loss: Average policy loss component.
+        grad_norm: Average gradient norm after clipping.
+    """
+    loss: float
+    mean_kl: float
+    policy_loss: float
+    grad_norm: float
+    
+    def to_dict(self, prefix: str = "train/") -> dict[str, float]:
+        """Convert metrics to dictionary format.
+        
+        Args:
+            prefix: Prefix to add to each key (e.g., "train/", "student/train/").
+            
+        Returns:
+            Dictionary with prefixed keys.
+        """
+        return {
+            f"{prefix}loss": self.loss,
+            f"{prefix}mean_kl": self.mean_kl,
+            f"{prefix}policy_loss": self.policy_loss,
+            f"{prefix}grad_norm": self.grad_norm,
+        }
 
 def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left", value: int = 0) -> torch.Tensor:
     """ """
@@ -95,8 +127,20 @@ def update(
     experience: ExperienceBuffer,
     config: GRPOConfig,
     device: torch.device,
-) -> Dict[str, float]:
-    """Update the policy model using the collected experience."""
+) -> TrainingMetrics:
+    """Update the policy model using the collected experience.
+    
+    Args:
+        model: The policy model to update.
+        ref_model: Reference model for KL regularization.
+        optimizer: Optimizer for updating model parameters.
+        experience: Experience buffer containing rollout data.
+        config: Training configuration.
+        device: Device to run computation on.
+        
+    Returns:
+        TrainingMetrics if any steps were performed, None otherwise.
+    """
     model.train()
     
     # DataLoader
@@ -173,11 +217,9 @@ def update(
             
             del log_probs, log_probs_ref, loss
 
-    if steps > 0:
-        return {
-            "train/loss": total_loss / steps,
-            "train/mean_kl": total_kl / steps,
-            "train/policy_loss": total_policy_loss / steps,
-            "train/grad_norm": total_grad_norm / steps,
-        }
-    return {}
+    return TrainingMetrics(
+        loss=total_loss / steps,
+        mean_kl=total_kl / steps,
+        policy_loss=total_policy_loss / steps,
+        grad_norm=total_grad_norm / steps,
+    )

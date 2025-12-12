@@ -19,10 +19,9 @@ import asyncio
 import copy
 from dataclasses import dataclass, field
 import random
-from typing import List, Optional, Dict, Any, Tuple, Callable
+from typing import Optional, Any, Callable
 
 import torch
-from torch import Tensor
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 from teacher_torch.experience import ExperienceBuffer, Experience
@@ -38,6 +37,7 @@ from environment.reward import (
 from curriculum.prompt_template import TeacherPrompt
 from curriculum.tasks import BooleanConstraintsSatisfaction
 from transformers import GenerationConfig
+import tyro
 import rich
 
 @dataclass
@@ -85,6 +85,70 @@ class GRPOConfig:
     
     # Logging configuration
     log_interval: int = 1
+
+
+@dataclass
+class RunnerMetrics:
+    """Metrics collected during a training step.
+    
+    Combines metrics from rollout phases and training updates.
+    
+    Attributes:
+        step: Training step number.
+        teacher_mean_reward: Mean reward from teacher rollout.
+        teacher_std_reward: Standard deviation of teacher rewards.
+        teacher_mean_entropy: Mean entropy from teacher rollout.
+        student_mean_reward: Mean reward from student rollout.
+        student_std_reward: Standard deviation of student rewards.
+        student_mean_entropy: Mean entropy from student rollout.
+        student_train_loss: Training loss from student update.
+        student_train_mean_kl: Mean KL divergence from student update.
+        student_train_policy_loss: Policy loss from student update.
+        student_train_grad_norm: Gradient norm from student update.
+        teacher_train_loss: Training loss from teacher update.
+        teacher_train_mean_kl: Mean KL divergence from teacher update.
+        teacher_train_policy_loss: Policy loss from teacher update.
+        teacher_train_grad_norm: Gradient norm from teacher update.
+    """
+    step: int
+    teacher_mean_reward: float
+    teacher_std_reward: float
+    teacher_mean_entropy: float
+    student_mean_reward: float
+    student_std_reward: float
+    student_mean_entropy: float
+    student_train_loss: float
+    student_train_mean_kl: float
+    student_train_policy_loss: float
+    student_train_grad_norm: float
+    teacher_train_loss: float
+    teacher_train_mean_kl: float
+    teacher_train_policy_loss: float
+    teacher_train_grad_norm: float
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert metrics to dictionary format for logging.
+        
+        Returns:
+            Dictionary with all metrics as key-value pairs.
+        """
+        return {
+            "step": self.step,
+            "teacher/mean_reward": self.teacher_mean_reward,
+            "teacher/std_reward": self.teacher_std_reward,
+            "teacher/mean_entropy": self.teacher_mean_entropy,
+            "student/mean_reward": self.student_mean_reward,
+            "student/std_reward": self.student_std_reward,
+            "student/mean_entropy": self.student_mean_entropy,
+            "student/train/loss": self.student_train_loss,
+            "student/train/mean_kl": self.student_train_mean_kl,
+            "student/train/policy_loss": self.student_train_policy_loss,
+            "student/train/grad_norm": self.student_train_grad_norm,
+            "teacher/train/loss": self.teacher_train_loss,
+            "teacher/train/mean_kl": self.teacher_train_mean_kl,
+            "teacher/train/policy_loss": self.teacher_train_policy_loss,
+            "teacher/train/grad_norm": self.teacher_train_grad_norm,
+        }
 
 
 class GRPOTrainer:
@@ -240,7 +304,7 @@ class GRPOTrainer:
     
     def rollout_teacher(
         self,
-        seed_tasks: List[str],
+        seed_tasks: list[str],
         teacher_reward_fn: Callable[[SamplingOutput], dict],
     ) -> tuple[ExperienceBuffer, RolloutMetric]:
         """Execute teacher rollout phase.
@@ -282,9 +346,9 @@ class GRPOTrainer:
     
     def rollout_student(
         self,
-        prompts: List[str],
+        prompts: list[str],
         student_reward_fn: Callable[[SamplingOutput], dict],
-    ) -> Tuple[ExperienceBuffer, RolloutMetric]:
+    ) -> tuple[ExperienceBuffer, RolloutMetric]:
         """Execute student rollout phase.
         
         For each valid curriculum, generates multiple answer attempts
@@ -356,11 +420,11 @@ class GRPOTrainer:
         )
         
         # Combine metrics with prefixes
-        metrics: Dict[str, float] = {}
-        for key, value in student_metrics.items():
-            metrics[f"student/{key}"] = value
-        for key, value in teacher_metrics.items():
-            metrics[f"teacher/{key}"] = value
+        metrics: dict[str, float] = {}
+        if student_metrics is not None:
+            metrics.update(student_metrics.to_dict(prefix="student/train/"))
+        if teacher_metrics is not None:
+            metrics.update(teacher_metrics.to_dict(prefix="teacher/train/"))
             
         return metrics
 
@@ -377,12 +441,12 @@ class GRPOTrainer:
     
     def train(
         self,
-        seed_tasks: List[str],
+        seed_tasks: list[str],
         num_steps: int = 100,
         teacher_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
         student_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
-        logger: Optional[Callable[[Dict[str, Any]], None]] = None,
-    ) -> List[Dict[str, Any]]:
+        logger: Optional[Callable[[dict[str, Any]], None]] = None,
+    ) -> list[RunnerMetrics]:
         """Run the main GRPO training loop.
         
         Alternates between:
@@ -398,16 +462,16 @@ class GRPOTrainer:
             logger: Optional callback for logging metrics (e.g., wandb.log).
         
         Returns:
-            List of metrics dictionaries, one per training step.
+            List of RunnerMetrics objects, one per training step.
         """
-        all_metrics: List[Dict[str, Any]] = []
+        all_metrics: list[RunnerMetrics] = []
         
         for step in range(num_steps):
             print(f"\n=== Step {step + 1}/{num_steps} ===")
             
             # Phase 1: Teacher generates curricula
             print("Teacher generating curricula...")
-            teacher_exp, teacher_metrics = self.rollout_teacher(
+            teacher_exp, teacher_rollout_metrics = self.rollout_teacher(
                 seed_tasks=seed_tasks,
                 teacher_reward_fn=teacher_reward_fn,
             )
@@ -419,67 +483,127 @@ class GRPOTrainer:
             
             # Phase 2: Student solves curricula
             print("Student solving curricula...")
-            student_exp, student_metrics = self.rollout_student(
+            student_exp, student_rollout_metrics = self.rollout_student(
                 prompts=curriculum_generations,
                 student_reward_fn=student_reward_fn,
             )
             
             # Phase 3: GRPO optimization
             print("Training...")
-            metrics = self.train_step(teacher_exp, student_exp)
+            train_metrics = self.train_step(teacher_exp, student_exp)
         
-            # Add step-level metrics from rollout
-            metrics["step"] = step + 1
-            metrics["teacher/mean_reward"] = teacher_metrics.mean_reward
-            metrics["teacher/std_reward"] = teacher_metrics.std_reward
-            metrics["teacher/mean_entropy"] = teacher_metrics.mean_entropy
-            metrics["student/mean_reward"] = student_metrics.mean_reward
-            metrics["student/std_reward"] = student_metrics.std_reward
-            metrics["student/mean_entropy"] = student_metrics.mean_entropy
+            # Create RunnerMetrics object
+            runner_metrics = RunnerMetrics(
+                step=step + 1,
+                teacher_mean_reward=teacher_rollout_metrics.mean_reward,
+                teacher_std_reward=teacher_rollout_metrics.std_reward,
+                teacher_mean_entropy=teacher_rollout_metrics.mean_entropy,
+                student_mean_reward=student_rollout_metrics.mean_reward,
+                student_std_reward=student_rollout_metrics.std_reward,
+                student_mean_entropy=student_rollout_metrics.mean_entropy,
+                student_train_loss=train_metrics.get("student/train/loss", 0.0),
+                student_train_mean_kl=train_metrics.get("student/train/mean_kl", 0.0),
+                student_train_policy_loss=train_metrics.get("student/train/policy_loss", 0.0),
+                student_train_grad_norm=train_metrics.get("student/train/grad_norm", 0.0),
+                teacher_train_loss=train_metrics.get("teacher/train/loss", 0.0),
+                teacher_train_mean_kl=train_metrics.get("teacher/train/mean_kl", 0.0),
+                teacher_train_policy_loss=train_metrics.get("teacher/train/policy_loss", 0.0),
+                teacher_train_grad_norm=train_metrics.get("teacher/train/grad_norm", 0.0),
+            )
             
-            all_metrics.append(metrics)
+            all_metrics.append(runner_metrics)
             
             # Logging
             if step % self.config.log_interval == 0:
-                print(f"Metrics: {metrics}")
+                metrics_dict = runner_metrics.to_dict()
+                print(f"Metrics: {metrics_dict}")
                 if logger:
-                    logger(metrics)
+                    logger(metrics_dict)
         
         return all_metrics
 
 
-def main() -> None:
-    """Example usage of GRPO training."""
-    seed_tasks = [
-        """
+@dataclass
+class CliArgs:
+    """Command-line arguments for GRPO training."""
+    # Model configuration
+    model_name_or_path: str = "Qwen/Qwen3-0.6B"
+    
+    # Generation configuration
+    teacher_group_size: int = 8
+    student_group_size: int = 16
+    max_new_tokens: int = 512
+    temperature: float = 0.7
+    top_p: float = 0.9
+    
+    # Training configuration
+    learning_rate: float = 1e-5
+    max_grad_norm: float = 1.0
+    epochs_per_step: int = 1
+    
+    # GRPO hyperparameters
+    clip_eps: float = 0.2
+    kl_beta: float = 0.04
+    normalize_advantages: bool = True
+    solved_threshold: float = 1.0
+    
+    # Training loop configuration
+    mini_batch_size: int = 4
+    logits_minibatch_size: int = 128
+    
+    # Logging configuration
+    log_interval: int = 1
+    
+    # Training loop arguments
+    num_steps: int = 100
+    seed: int = 42
+    
+    # Seed task (can be provided as a single string or file path)
+    seed_task: str = """
         Design a problem where the student must find an integer x that satisfies:
         - Mathematical constraints involving arithmetic operations
         - The solution should require multi-step reasoning
-        """,
-        """
-        Design a problem where the student must find a value x that satisfies:
-        - Constraints involving comparisons and logical conditions
-        - The problem should have a unique solution
-        """,
-    ]
-    
+    """
+
+
+def main(args: CliArgs = tyro.cli(CliArgs)) -> None:
+    """Main entry point for GRPO training."""
+    # Convert CliArgs to GRPOConfig
     config = GRPOConfig(
-        model_name_or_path="Qwen/Qwen3-0.6B",
-        teacher_group_size=2,
-        student_group_size=2,
-        learning_rate=1e-5,
-        kl_beta=0.04,
+        model_name_or_path=args.model_name_or_path,
+        teacher_group_size=args.teacher_group_size,
+        student_group_size=args.student_group_size,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        learning_rate=args.learning_rate,
+        max_grad_norm=args.max_grad_norm,
+        epochs_per_step=args.epochs_per_step,
+        clip_eps=args.clip_eps,
+        kl_beta=args.kl_beta,
+        normalize_advantages=args.normalize_advantages,
+        solved_threshold=args.solved_threshold,
+        mini_batch_size=args.mini_batch_size,å
+        logits_minibatch_size=args.logits_minibatch_size,
+        log_interval=args.log_interval,
     )
     
-    trainer = GRPOTrainer(config)
+    # Create trainer
+    trainer = GRPOTrainer(config, seed=args.seed)
+    å
+    # Prepare seed tasks
+    seed_tasks = [args.seed_task.strip()]
     
+    # Run training
     metrics = trainer.train(
         seed_tasks=seed_tasks,
-        num_steps=10,
+        num_steps=args.num_steps,
     )
     
     print("\nTraining complete!")
-    print(f"Final metrics: {metrics[-1]}")
+    if metrics:
+        final_metrics = metrics[-1]
+        print(f"Final metrics: {final_metrics.to_dict()}")
 
 
 if __name__ == "__main__":
