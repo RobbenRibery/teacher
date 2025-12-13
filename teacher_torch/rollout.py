@@ -6,7 +6,7 @@ and package everything into Experience for training.
 """
 from __future__ import annotations
 
-from typing import Callable, Any
+from typing import Callable, Any, Optional
 from dataclasses import dataclass
 
 import torch
@@ -63,11 +63,11 @@ def rollout(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     prompts: list[str],
-    reward_fn: RewardFn,
     generation_config: GenerationConfig,
     config: RolloutConfig,
     role: str,
     solved_threshold: float = 1.0,
+    reward_fn: Optional[RewardFn] = None,
 ) -> tuple[ExperienceBuffer, RolloutMetric]:
     """
     Perform a single rollout: sample responses and compute experiences.
