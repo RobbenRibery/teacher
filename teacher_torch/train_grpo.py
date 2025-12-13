@@ -15,10 +15,8 @@ Key features:
 """
 from __future__ import annotations
 
-import asyncio
 import copy
-from dataclasses import dataclass, field
-import random
+from dataclasses import dataclass
 from typing import Optional, Any, Callable
 
 import torch
@@ -28,63 +26,11 @@ from teacher_torch.experience import ExperienceBuffer, Experience
 from teacher_torch.rollout import rollout, RolloutMetric, RolloutConfig
 from teacher_torch.sampling import SamplingOutput
 from teacher_torch.utils import load_model_tokenizer
-from teacher_torch.policy_gradient import update
-from environment.reward import (
-    reward_curriculum,
-    reward_answer_group,
-    AnswerReward,
-)
+from teacher_torch.policy_gradient import update, GRPOConfig
 from curriculum.prompt_template import TeacherPrompt
 from curriculum.tasks import BooleanConstraintsSatisfaction
 from transformers import GenerationConfig
 import tyro
-import rich
-
-@dataclass
-class GRPOConfig:
-    """Configuration for GRPO training.
-    
-    Attributes:
-        model_name_or_path: HuggingFace model identifier or local path.
-        teacher_group_size: Number of curriculum samples per seed task (G_teacher).
-        student_group_size: Number of answer samples per curriculum (G_student).
-        max_new_tokens: Maximum tokens to generate per completion.
-        temperature: Sampling temperature (higher = more random).
-        top_p: Nucleus sampling probability threshold.
-        learning_rate: Optimizer learning rate.
-        max_grad_norm: Maximum gradient norm for clipping.
-        epochs_per_step: Number of optimization epochs per rollout batch.
-        clip_eps: PPO clipping epsilon for importance ratio.
-        kl_beta: KL penalty coefficient (higher = more conservative updates).
-        log_interval: Steps between logging outputs.
-    """
-    # Model configuration
-    model_name_or_path: str = "Qwen/Qwen3-0.6B"
-    
-    # Generation configuration
-    teacher_group_size: int = 8
-    student_group_size: int = 16
-    max_new_tokens: int = 512
-    temperature: float = 0.7
-    top_p: float = 0.9
-    
-    # Training configuration
-    learning_rate: float = 1e-5
-    max_grad_norm: float = 1.0
-    epochs_per_step: int = 1
-    
-    # GRPO hyperparameters
-    clip_eps: float = 0.2
-    kl_beta: float = 0.04
-    normalize_advantages: bool = True
-    solved_threshold: float = 1.0
-
-    # Training loop configuration
-    mini_batch_size: int = 4
-    logits_minibatch_size: int = 128
-    
-    # Logging configuration
-    log_interval: int = 1
 
 
 @dataclass
@@ -241,18 +187,22 @@ class GRPOTrainer:
         # generation config
         self.teacher_generation_config = teacher_generation_config or GenerationConfig(
             max_new_tokens=config.max_new_tokens,
-            temperature=1,
+            temperature=config.temperature,
+            top_k=config.top_k,
+            top_p=config.top_p,
             do_sample=True,
             num_return_sequences=config.teacher_group_size,
         )
         self.student_generation_config = student_generation_config or GenerationConfig(
             max_new_tokens=config.max_new_tokens,
-            temperature=1,
+            temperature=config.temperature,
+            top_k=config.top_k,
+            top_p=config.top_p,
             do_sample=True,
             num_return_sequences=config.student_group_size,
         )
     
-    def _build_teacher_prompt(self, seed_task: str) -> str:
+    def _build_teacher_prompt(self) -> str:
         """Build formatted teacher prompt from seed task.
         
         Args:
@@ -262,7 +212,7 @@ class GRPOTrainer:
             Formatted prompt string ready for tokenization.
         """
         prompt = self.teacher_prompt_template.prompt(
-            seed_task=seed_task,
+            seed_task=self.task.render(),
             num_instances=1,
         )
         return self.tokenizer.apply_chat_template(
@@ -304,8 +254,7 @@ class GRPOTrainer:
     
     def rollout_teacher(
         self,
-        seed_tasks: list[str],
-        teacher_reward_fn: Callable[[SamplingOutput], dict],
+        teacher_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
     ) -> tuple[ExperienceBuffer, RolloutMetric]:
         """Execute teacher rollout phase.
         
@@ -313,7 +262,6 @@ class GRPOTrainer:
         reward function.
         
         Args:
-            seed_tasks: List of high-level task descriptions.
             teacher_reward_fn: Callable that takes SamplingOutput and returns
                 a dict with "rewards" key containing a tensor of shape (num_samples,).
         
@@ -323,7 +271,7 @@ class GRPOTrainer:
                 - metrics: RolloutMetric containing generation statistics.
         """
         # Build teacher prompts
-        prompts = [self._build_teacher_prompt(task) for task in seed_tasks]
+        prompts = [self._build_teacher_prompt()]
         
         # Create rollout config
         rollout_config = RolloutConfig(
@@ -337,11 +285,11 @@ class GRPOTrainer:
             model=self.model,
             tokenizer=self.tokenizer,
             prompts=prompts,
-            reward_fn=teacher_reward_fn,
             generation_config=self.teacher_generation_config,
             config=rollout_config,
             role="teacher",
             solved_threshold=self.config.solved_threshold,
+            reward_fn=teacher_reward_fn if teacher_reward_fn is not None else None,
         )
     
     def rollout_student(
@@ -534,6 +482,7 @@ class CliArgs:
     student_group_size: int = 16
     max_new_tokens: int = 512
     temperature: float = 0.7
+    top_k: int = 50
     top_p: float = 0.9
     
     # Training configuration
@@ -575,6 +524,7 @@ def main(args: CliArgs = tyro.cli(CliArgs)) -> None:
         student_group_size=args.student_group_size,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
+        top_k=args.top_k,
         top_p=args.top_p,
         learning_rate=args.learning_rate,
         max_grad_norm=args.max_grad_norm,
@@ -590,7 +540,7 @@ def main(args: CliArgs = tyro.cli(CliArgs)) -> None:
     
     # Create trainer
     trainer = GRPOTrainer(config, seed=args.seed)
-    å
+    
     # Prepare seed tasks
     seed_tasks = [args.seed_task.strip()]
     

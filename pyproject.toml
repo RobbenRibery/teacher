@@ -27,13 +27,14 @@ dependencies = [
 
 [project.optional-dependencies]
 flash = ["flash-attn>=2.8.3"]
+logging = ["colorlog"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["teacher_jax", "teacher_torch", "environment", "curriculum"]
+packages = ["teacher_torch", "environment", "curriculum"]
 
 [tool.uv.extra-build-dependencies]
 flash-attn = ["torch", "setuptools", "packaging", "ninja"]

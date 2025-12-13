@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import torch
 from transformers import (
     PreTrainedModel, 
@@ -8,6 +8,9 @@ from transformers import (
     GenerationConfig,
     set_seed,
 )
+from teacher_torch.utils import setup_logger_with_file_line    
+
+logger = setup_logger_with_file_line(__name__)
 
 @dataclass
 class SamplingOutput:
@@ -38,13 +41,26 @@ class SamplingOutput:
         prompts: List of original prompt strings used for generation.
             Length: batch_size
     """
-    num_samples: int = field(description="Number of samples generated (batch size).")
-    input_ids: torch.IntTensor = field(description="Token IDs of the input prompts.")
-    attention_mask: torch.IntTensor = field(description="Attention mask for the input prompts.")
-    sequence_ids: torch.IntTensor = field(description="Token IDs of the full sequences (prompt + generated).")
-    action_mask: torch.BoolTensor = field(description="Boolean mask indicating which tokens were generated (True for generated tokens, False for input/padding tokens).")
-    completions: list[str] = field(description="List of decoded completion strings.")
-    prompts: list[str] = field(description="List of prompt strings.")
+    num_samples: int
+    input_ids: torch.IntTensor
+    sequence_attention_mask: torch.IntTensor # this is the attention mask for the sequence ids
+    sequence_ids: torch.IntTensor
+    action_mask: torch.BoolTensor
+    completions: list[str]
+    prompts: list[str]
+
+    def __str__(self) -> str:
+        return (
+            f"SamplingOutput(\n"
+            f"  num_samples: {self.num_samples}\n"
+            f"  input_ids: shape={tuple(self.input_ids.shape)}, dtype={self.input_ids.dtype}\n"
+            f"  sequence_attention_mask: shape={tuple(self.sequence_attention_mask.shape)}, dtype={self.sequence_attention_mask.dtype}\n"
+            f"  sequence_ids: shape={tuple(self.sequence_ids.shape)}, dtype={self.sequence_ids.dtype}\n"
+            f"  action_mask: shape={tuple(self.action_mask.shape)}, dtype={self.action_mask.dtype}\n"
+            f"  completions: list[str], len={len(self.completions)}\n"
+            f"  prompts: list[str], len={len(self.prompts)}\n"
+            f")"
+        )
 
 @torch.no_grad()
 def sample_responses_hf(
@@ -79,25 +95,39 @@ def sample_responses_hf(
             - completions: List of decoded completion strings.
     """
     assert tokenizer.padding_side == "left", f"Tokenizer padding_side must be 'left', got '{tokenizer.padding_side}'"
-    # set the seed
+    model.eval()
+
+    # set the seed for reproducibilitys
     set_seed(seed)
-    
-    batch_inputs:dict[str, torch.IntTensor] = tokenizer.batch_decode(prompts, return_tensors="pt", padding=True, truncation=True)
+
+    batch_inputs:dict[str, torch.IntTensor] = tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding='longest',
+        truncation=True,
+        return_attention_mask=True,
+        padding_side = "left",
+    )
     pad_token_id = tokenizer.pad_token_id
 
+    logger.info(f"Generation config:\n======\n{generation_config.to_dict()}\n======\n")
     sequence_ids:torch.IntTensor = model.generate(
         input_ids=batch_inputs["input_ids"].to(model.device),
         attention_mask=batch_inputs["attention_mask"].to(model.device),
-        generation_config=generation_config
+        **generation_config.to_dict()
     )
+
     action_mask:torch.BoolTensor = torch.zeros_like(sequence_ids, dtype=torch.bool, device=sequence_ids.device)
     action_mask[:, batch_inputs["input_ids"].shape[1] :] = True
     action_mask[sequence_ids == pad_token_id] = False
     action_mask:torch.BoolTensor = action_mask[:, 1:]
 
+    sequence_attention_mask:torch.IntTensor = (sequence_ids != pad_token_id).long()
+
     return SamplingOutput(
         num_samples=batch_inputs["input_ids"].shape[0],
         input_ids=batch_inputs["input_ids"],
+        sequence_attention_mask=sequence_attention_mask,
         sequence_ids=sequence_ids,
         action_mask=action_mask,
         completions=tokenizer.batch_decode(

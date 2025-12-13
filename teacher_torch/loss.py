@@ -20,8 +20,10 @@ from transformers import PreTrainedModel
 import torch
 
 from teacher_torch.utils import release_memory
+from teacher_torch.utils import setup_logger_with_file_line
+logger = setup_logger_with_file_line(__name__)
 
- # ============================================================================
+# ============================================================================
 # Core loss functions (compiled via decorator)
 # ============================================================================
 @torch.compile(dynamic=True)
@@ -248,6 +250,8 @@ def _sequence_log_probs_from_logits(
     """
     Computes the log probabilities of the output ids from the logits.
 
+    Optimized version using log_softmax for better performance.
+
     Args:
         logits (torch.FloatTensor): The logits of the model. (num_samples * num_rollouts, seq_len, vocab_size)
         output_ids (torch.IntTensor): The output ids to compute the log probabilities for. (num_samples * num_rollouts, seq_len)
@@ -258,19 +262,21 @@ def _sequence_log_probs_from_logits(
         torch.FloatTensor | None: The entropy of the distribution. None if return_entropy is False.
     """
     
-    # Gather the logits corresponding to the output_ids
-    gathered_logits: torch.FloatTensor = logits.gather(
+    # Compute log_softmax once (more efficient than manual logsumexp)
+    log_probs_all = torch.nn.functional.log_softmax(logits, dim=-1)  # (num_samples * num_rollouts, seq_len, vocab_size)
+    
+    # Gather the log probabilities corresponding to the output_ids
+    log_probs = log_probs_all.gather(
         dim=-1, 
         index=output_ids.unsqueeze(-1)
     ).squeeze(-1)  # (num_samples * num_rollouts, seq_len)
 
-    # Compute log-sum-exp over the vocabulary dimension
-    log_sum_exp = logits.logsumexp(dim=-1)  # (num_samples * num_rollouts, seq_len)
-    log_probs = gathered_logits - log_sum_exp
-
     if return_entropy:
-        pd = torch.nn.functional.softmax(logits, dim=-1)
-        entropy = log_sum_exp - torch.sum(pd * logits, dim=-1)
+        # Optimized entropy computation: H = -sum(p * log(p))
+        # where p = exp(log_softmax), so H = -sum(exp(log_softmax) * log_softmax)
+        # This reuses log_probs_all and avoids separate softmax computation
+        probs = torch.exp(log_probs_all)  # (num_samples * num_rollouts, seq_len, vocab_size)
+        entropy = -torch.sum(probs * log_probs_all, dim=-1)  # (num_samples * num_rollouts, seq_len)
         return log_probs, entropy
     else:
         return log_probs, None
@@ -280,7 +286,7 @@ def _sequence_log_probs_from_logits(
 def sequences_log_probs(
     model: PreTrainedModel,
     sequence_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
+    sequence_attention_mask: torch.Tensor,
     return_entropy: bool = True,
     logits_minibatch_size: int = 128,
 ) -> tuple[torch.Tensor, torch.Tensor | None]: 
@@ -291,21 +297,22 @@ def sequences_log_probs(
         model (PreTrainedModel): The model to compute the log probabilities for.
         sequence_ids (torch.Tensor): The sequence ids to compute the log probabilities for.
             (num_samples * group_size, seq_len)
-        attention_mask (torch.Tensor): The attention mask to compute the log probabilities for.
+        sequence_attention_mask (torch.Tensor): The attention mask to compute the log probabilities for.
             (num_samples * group_size, seq_len)
 
     Returns:
-        torch.Tensor: The log probabilities of the output ids. (num_samples * group_size, seq_len-1, vocab_size)
+        torch.Tensor: The log probabilities of the output ids. (num_samples * group_size, seq_len-1)
     """
-    token_logprobs = []
+    token_logprobs: list[torch.Tensor] = []
     if return_entropy:
-        token_entropy = []
+        token_entropy: list[torch.Tensor] = []
 
     for i in range(0, sequence_ids.shape[0], logits_minibatch_size):
         mini_ids = sequence_ids[i:i+logits_minibatch_size]
-        mini_mask = attention_mask[i:i+logits_minibatch_size]
+        mini_mask = sequence_attention_mask[i:i+logits_minibatch_size]
         mini_output = model(input_ids=mini_ids, attention_mask=mini_mask, use_cache=False)
-        mini_logits = mini_output["logits"]
+        mini_logits: torch.FloatTensor = mini_output["logits"]
+        logger.info(f"Mini logits shape: {mini_logits.shape}")
 
         del mini_mask, mini_output
 
@@ -320,5 +327,10 @@ def sequences_log_probs(
         if return_entropy:
             token_entropy.append(entropy)
 
-    release_memory([mini_logits, mini_ids]) 
-    return torch.cat(token_logprobs, dim=0), torch.cat(token_entropy, dim=0) if return_entropy else None
+    del mini_logits, mini_ids
+    torch.cuda.empty_cache()
+    reconstructed_logprobs = torch.cat(token_logprobs, dim=0)
+    reconstructed_entropy = torch.cat(token_entropy, dim=0) if return_entropy else None
+    logger.info(f"Reconstructed logprobs shape: {reconstructed_logprobs.shape}")
+    logger.info(f"Reconstructed entropy shape: {reconstructed_entropy.shape if reconstructed_entropy is not None else None}")
+    return reconstructed_logprobs, reconstructed_entropy

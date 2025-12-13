@@ -13,6 +13,9 @@ class Experience:
     The batch size is the number of samples in a batch (i.e. number of groups * num_samples)
     The sequence length is the length of the sequences in the batch.
     """
+    prompt: str
+    completion: list[str]
+    role:str
     pad_token_id:int
 
     sequences: torch.IntTensor  # (num_samples * group_size, seq_len)
@@ -20,26 +23,31 @@ class Experience:
     action_mask: torch.BoolTensor  # (num_samples * group_size, seq_len-1)
     action_log_probs: torch.FloatTensor  # (num_samples * group_size, seq_len-1)
 
-    returns: torch.FloatTensor  # (num_samples * group_size, )
-    solved_mask: torch.BoolTensor  # (num_samples * group_size, )
-    advantages: torch.FloatTensor  # (num_samples * group_size, )
-    learnability: torch.FloatTensor # (num_samples, )
-    prompt: str
-    completion: list[str]
-    role:str
+    returns: Optional[torch.FloatTensor] = None   # (num_samples * group_size, )
+    solved_mask: Optional[torch.BoolTensor] = None  # (num_samples * group_size, )
+    advantages: Optional[torch.FloatTensor] = None  # (num_samples * group_size, )
+    learnability: Optional[torch.FloatTensor] = None # (num_samples, )
 
-    kl: Optional[torch.Tensor]  = None # (num_samples * group_size, seq_len-1) (boolean)
-    log_probs_ref: Optional[torch.Tensor] = None # (num_samples * group_size, seq_len-1)
+    #kl: Optional[torch.Tensor]  = None # (num_samples * group_size, seq_len-1) (boolean)
+    #log_probs_ref: Optional[torch.Tensor] = None # (num_samples * group_size, seq_len-1)
 
     def to(self, device: torch.device) -> Self:
+        """Move all tensor fields in the experience to the specified device.
+        
+        Args:
+            device: Target device to move tensors to (e.g., torch.device('cuda') or torch.device('cpu')).
+        
+        Returns:
+            New Experience instance with all tensor fields moved to the device.
+            Non-tensor fields (prompt, completion, role, pad_token_id) remain unchanged.
+        """
         members = {}
         for field in fields(self):
             v = getattr(self, field.name)
-            if isinstance(v, torch.Tensor):
+            if isinstance(v, torch.Tensor) and v is not None:
                 v = v.to(device=device)
             members[field.name] = v
         return Experience(**members)
-
 
 @dataclass
 class ExperienceBuffer:
@@ -48,6 +56,10 @@ class ExperienceBuffer:
     Each instance represent a grouped rollout for a single instruction/prompt.
     """
     experiences: list[Experience]
+
+    @property
+    def num_unique_prompts(self) -> int:
+        return len(set(exp.prompt for exp in self.experiences))
 
     def __len__(self) -> int:
         return len(self.experiences)
@@ -89,13 +101,13 @@ class ExperienceBuffer:
         role: str,
         sampling_output: "SamplingOutput",
         pad_token_id: int,
-        action_log_probs: torch.FloatTensor,
-        rewards: torch.FloatTensor,
-        advantages: torch.FloatTensor,
         group_size: int,
-        learnability: torch.FloatTensor,
-        prompt: list[str],
+        prompts: list[str],
         completions: list[str],
+        action_log_probs: torch.FloatTensor,
+        rewards: Optional[torch.FloatTensor] = None,
+        advantages: Optional[torch.FloatTensor] = None,
+        learnability: Optional[torch.FloatTensor] = None,
         solved_threshold: float = 1.0,
     ) -> Self:
         """
@@ -118,8 +130,9 @@ class ExperienceBuffer:
         """
         # prompt has length num_samples (number of groups)
         # completions has length batch_size (total number of samples)
-        num_samples = len(prompt)
+        num_samples = len(prompts)
         batch_size = len(completions)
+        solved_mask: Optional[torch.BoolTensor] = None
         
         # Validate that batch_size matches num_samples * group_size
         if batch_size != num_samples * group_size:
@@ -132,24 +145,26 @@ class ExperienceBuffer:
             raise ValueError(
                 f"action_log_probs.shape[0] ({action_log_probs.shape[0]}) must equal batch_size ({batch_size})"
             )
-        if rewards.shape[0] != batch_size:
-            raise ValueError(
-                f"rewards.shape[0] ({rewards.shape[0]}) must equal batch_size ({batch_size})"
-            )
-        if advantages.shape[0] != batch_size:
-            raise ValueError(
-                f"advantages.shape[0] ({advantages.shape[0]}) must equal batch_size ({batch_size})"
-            )
-        if learnability.shape[0] != batch_size:
-            raise ValueError(
-                f"learnability.shape[0] ({learnability.shape[0]}) must equal batch_size ({batch_size})"
-            )
-        
-        # Create attention mask from sequence_ids
-        attention_mask = (sampling_output.sequence_ids != pad_token_id).long()
-        
-        # Compute solved mask from rewards
-        solved_mask = (rewards >= solved_threshold).bool()
+
+        if rewards is not None:
+            if rewards.shape[0] != batch_size:
+                raise ValueError(
+                    f"rewards.shape[0] ({rewards.shape[0]}) must equal batch_size ({batch_size})"
+                )
+            # Compute solved mask from rewards
+            solved_mask:torch.BoolTensor = (rewards >= solved_threshold).bool()
+
+        if advantages is not None:
+            if advantages.shape[0] != batch_size:
+                raise ValueError(
+                    f"advantages.shape[0] ({advantages.shape[0]}) must equal batch_size ({batch_size})"
+                )
+        if learnability is not None:
+            if learnability.shape[0] != batch_size:
+                raise ValueError(
+                    f"learnability.shape[0] ({learnability.shape[0]}) must equal batch_size ({batch_size})"
+                )
+
         
         experiences = []
         for i in range(num_samples):
@@ -159,31 +174,47 @@ class ExperienceBuffer:
             
             # Extract data for this group
             group_sequences = sampling_output.sequence_ids[start_idx:end_idx]
-            group_attention_mask = attention_mask[start_idx:end_idx]
+            group_attention_mask = sampling_output.sequence_attention_mask[start_idx:end_idx]
             group_action_mask = sampling_output.action_mask[start_idx:end_idx]
             group_action_log_probs = action_log_probs[start_idx:end_idx]
-            group_returns = rewards[start_idx:end_idx]
-            group_solved_mask = solved_mask[start_idx:end_idx]
-            group_advantages = advantages[start_idx:end_idx]
-            group_learnability = learnability[start_idx:end_idx]
+
+            if rewards is not None:
+                group_returns = rewards[start_idx:end_idx]
+            else:
+                group_returns = None
+
+            if solved_mask is not None:
+                group_solved_mask = solved_mask[start_idx:end_idx]
+            else:
+                group_solved_mask = None
+
+            if advantages is not None:
+                group_advantages = advantages[start_idx:end_idx]
+            else:
+                group_advantages = None
+
+            if learnability is not None:
+                group_learnability = learnability[start_idx:end_idx]
+            else:
+                group_learnability = None
             
             # Extract completions for this group
             # completions is a flat list of strings with length batch_size (one per sample)
             group_completions = completions[start_idx:end_idx]
             
             experience = Experience(
+                prompt=prompts[i],
+                completion=group_completions,
                 role=role,
                 pad_token_id=pad_token_id,
                 sequences=group_sequences.to("cpu"),
                 attention_mask=group_attention_mask.to("cpu"),
                 action_mask=group_action_mask.to("cpu"),
                 action_log_probs=group_action_log_probs.to("cpu"),
-                returns=group_returns.to("cpu"),
-                solved_mask=group_solved_mask.to("cpu"),
-                advantages=group_advantages.to("cpu"),
-                learnability=group_learnability.to("cpu"),
-                prompt=prompt[i],
-                completion=group_completions,
+                returns=group_returns.to("cpu") if group_returns is not None else None  ,
+                solved_mask=group_solved_mask.to("cpu") if group_solved_mask is not None else None,
+                advantages=group_advantages.to("cpu") if group_advantages is not None else None,
+                learnability=group_learnability.to("cpu") if group_learnability is not None else None,
             )
             experiences.append(experience)
 

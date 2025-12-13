@@ -1,4 +1,5 @@
 import gc
+import logging
 from typing import Optional, List, Any
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, AutoModelForCausalLM
 try:
@@ -6,8 +7,75 @@ try:
     HAS_LIGER = True
 except ImportError:
     HAS_LIGER = False
+try:
+    import colorlog
+    HAS_COLORLOG = True
+except ImportError:
+    HAS_COLORLOG = False
 import torch
 import rich
+
+
+def setup_logger_with_file_line(
+    logger_name: str, 
+    level: int = logging.INFO,
+    use_colors: Optional[bool] = None
+) -> logging.Logger:
+    """
+    Configure a logger to include filename and line number in log messages.
+    Optionally uses colored output via colorlog if available.
+    
+    Args:
+        logger_name: Name of the logger (typically __name__ from the calling module).
+        level: Logging level (default: logging.INFO).
+        use_colors: Whether to use colored output. If None, uses colors if colorlog is available.
+    
+    Returns:
+        Configured logger instance.
+    
+    Example:
+        >>> logger = setup_logger_with_file_line(__name__)
+        >>> logger.info("This will show filename and line number with colors")
+        >>> logger = setup_logger_with_file_line(__name__, use_colors=False)
+        >>> logger.info("This will show filename and line number without colors")
+    """
+    logger = logging.getLogger(logger_name)
+    
+    # Only configure if handler doesn't already exist
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        
+        # Determine if we should use colors
+        should_use_colors = use_colors if use_colors is not None else (HAS_COLORLOG and handler.stream.isatty())
+        
+        if should_use_colors and HAS_COLORLOG:
+            # Use colorlog for colored output
+            formatter = colorlog.ColoredFormatter(
+                '%(log_color)s%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S',
+                log_colors={
+                    'DEBUG': 'cyan',
+                    'INFO': 'green',
+                    'WARNING': 'yellow',
+                    'ERROR': 'red',
+                    'CRITICAL': 'red,bg_white',
+                },
+                secondary_log_colors={},
+                style='%'
+            )
+        else:
+            # Fallback to regular formatter
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+            )
+        
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(level)
+    
+    return logger
+
+logger = setup_logger_with_file_line(__name__)
 
 def release_memory(vars:List[Any]):
     for var in vars:
@@ -48,8 +116,14 @@ def load_model_tokenizer(
         
         if HAS_LIGER:
             ModelClass = AutoLigerKernelForCausalLM
+            logger.info(f"Using LigerKernel for model {model_name_or_path}")
 
     tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+    if tokenizer.padding_side == "right":
+        logger.info(f"Adjusting padding side from right to left for training")
+        # training padding should be on the left
+        tokenizer.padding_side = "left"
+
     model: PreTrainedModel = ModelClass.from_pretrained(
         model_name_or_path if checkpoint_path is None else checkpoint_path,
         trust_remote_code=trust_remote_code,
@@ -57,10 +131,10 @@ def load_model_tokenizer(
         dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
         device_map=device_map,
     )
-    print(f"Model loaded on {model.device}")
-    print(f"Model dtype: {model.dtype}")
-    print(f"Model architecture:\n{model}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
+    logger.debug(f"Model loaded on {model.device}")
+    logger.debug(f"Model dtype: {model.dtype}")
+    logger.debug(f"Model architecture:\n{model}")
+    logger.debug(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
     if freeze_model:
         for param in model.parameters():
             param.requires_grad = False

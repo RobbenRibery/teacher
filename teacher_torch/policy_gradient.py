@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import List, dict
 from dataclasses import dataclass
 import torch
 from torch.utils.data import DataLoader
@@ -11,8 +10,53 @@ from teacher_torch.loss import sequences_log_probs, grpo_loss
 
 from torch.optim import Optimizer
 from torch.nn import Module
-from teacher_torch.train_grpo import GRPOConfig
 
+@dataclass
+class GRPOConfig:
+    """Configuration for GRPO training.
+    
+    Attributes:
+        model_name_or_path: HuggingFace model identifier or local path.
+        teacher_group_size: Number of curriculum samples per seed task (G_teacher).
+        student_group_size: Number of answer samples per curriculum (G_student).
+        max_new_tokens: Maximum tokens to generate per completion.
+        temperature: Sampling temperature (higher = more random).
+        top_p: Nucleus sampling probability threshold.
+        learning_rate: Optimizer learning rate.
+        max_grad_norm: Maximum gradient norm for clipping.
+        epochs_per_step: Number of optimization epochs per rollout batch.
+        clip_eps: PPO clipping epsilon for importance ratio.
+        kl_beta: KL penalty coefficient (higher = more conservative updates).
+        log_interval: Steps between logging outputs.
+    """
+    # Model configuration
+    model_name_or_path: str = "Qwen/Qwen3-0.6B"
+    
+    # Generation configuration
+    teacher_group_size: int = 8
+    student_group_size: int = 16
+    max_new_tokens: int = 512
+    temperature: float = 0.7
+    top_k: int = 50
+    top_p: float = 0.9
+    
+    # Training configuration
+    learning_rate: float = 1e-5
+    max_grad_norm: float = 1.0
+    epochs_per_step: int = 1
+    
+    # GRPO hyperparameters
+    clip_eps: float = 0.2
+    kl_beta: float = 0.04
+    normalize_advantages: bool = True
+    solved_threshold: float = 1.0
+
+    # Training loop configuration
+    mini_batch_size: int = 4
+    logits_minibatch_size: int = 128
+    
+    # Logging configuration
+    log_interval: int = 1
 
 @dataclass
 class TrainingMetrics:
@@ -45,8 +89,8 @@ class TrainingMetrics:
             f"{prefix}grad_norm": self.grad_norm,
         }
 
-def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left", value: int = 0) -> torch.Tensor:
-    """ """
+def zero_pad_sequences(sequences: list[torch.Tensor], side: str = "left", value: int = 0) -> torch.Tensor:
+    """Zero pad sequences to the same length."""
     assert side in ("left", "right")
     max_len = max(seq.size(0) for seq in sequences)
     padded_sequences = []
@@ -56,13 +100,13 @@ def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left", value:
         padded_sequences.append(pad(seq, padding, value=value))
     return torch.stack(padded_sequences, dim=0)
 
-def collate_experience(batch: List[Experience]) -> Experience:
+def collate_experience(batch: list[Experience]) -> Experience:
     """Collate a batch of Experience objects into a single Experience object."""
     # keys to process
     keys = [
         "sequences", "attention_mask", "action_mask", "action_log_probs",
         "returns", "solved_mask", "advantages", "learnability",
-        "prompt", "completion", "role", "kl", "log_probs_ref"
+        "prompt", "completion", "role", "pad_token_id"
     ]
     
     batch_data = {}
