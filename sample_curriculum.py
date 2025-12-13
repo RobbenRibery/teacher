@@ -92,10 +92,13 @@ if __name__ == "__main__":
     
     # Sample
     print("Sampling curriculum...")
-    output = sample_curriculum(BooleanConstraintsSatisfaction(), model, tokenizer, max_new_tokens=12_000)
+    output = sample_curriculum(BooleanConstraintsSatisfaction(), model, tokenizer, max_new_tokens=12_000, temperature=1)
     
     print("-" * 50)
     print("Sampled Output:")
     rich.print(output)
     print("-" * 50)
+
+    with open("output.txt", 'w') as f:
+        f.write(output)
 
