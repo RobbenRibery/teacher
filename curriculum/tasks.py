@@ -36,20 +36,23 @@ class BooleanConstraintsSatisfaction(Task):
     
     description: str = dedent(
     """
-    ## Core Curriculum Objective:
-    Each instance in this curriculum is defined by a set of executable boolean constraints about a single variable "x".
-    To solve an instance, a student must write Python code to derive a particular value of "x" that meets all constraints imposed.
+    ## Objective:
+    Each problem from the curriculum is defined by a set of executable boolean constraints about a single variable "x".
+    To solve a problem from the curriculum, a student must write Python code to derive/search/find/compute a particular value of "x" that meets all constraints imposed.
 
-    # Properties of the task:
-    * Any instance designed must be solvable.
-    * The student must be able to exercise sophisticated logical reasoning, math, and programming skills to solve the instances you design.
+    # Properties of the curriculum
+    * Any problems from the curriculum must be solvable.
+    * The student must be able to exercise sophisticated logical reasoning, math, and programming skills to solve the problems you design.
     """
     ).strip()
 
     format: str = dedent(
     """
-    For each instance you create, put your final designed instance inside the <answer> tag. DO NOT provide the solution or any hints.
-    Example format for the final answer:
+    Put your final designed problem inside the <answer> tag and don't include solution or hints inside the final answer.
+    Example Format: 
+    <think>
+    ...
+    </think>
     <answer>
     Write Python code to derive a particular value of "x" that meets all constraints imposed:
     ```python

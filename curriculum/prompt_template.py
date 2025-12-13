@@ -19,17 +19,30 @@ class PromptTemplate(BaseModel):
     def render(self, seed_task: str, num_instances: int) -> str:
         return self.system + "\n\n" + self.task.format(seed_task=seed_task, num_instances=num_instances)
 
-    def prompt(self, seed_task: str, num_instances: int) -> list[dict[str, str]]:
-        return [
-            {
-                "role": "system",
-                "content": self.system
-            },
-            {
-                "role": "user",
-                "content": self.task.format(seed_task=seed_task, num_instances=num_instances)
-            }
-        ]
+    def prompt(self, seed_task: str, num_instances: int, include_system: bool = False) -> list[dict[str, str]]:
+        if include_system:
+            return [
+                {
+                    "role": "system",
+                    "content": self.system
+                },
+                {
+                    "role": "user",
+                    "content": self.task.format(seed_task=seed_task, num_instances=num_instances)
+                }
+            ]
+        else:
+            return [
+                {
+                    "role": "user",
+                    "content": self.system + \
+                                "\n\n" + \
+                                self.task.format(
+                                    seed_task=seed_task, 
+                                    num_instances=num_instances
+                                )
+                }
+            ]
 
 
 class TeacherPrompt(PromptTemplate):
@@ -39,8 +52,7 @@ class TeacherPrompt(PromptTemplate):
     system:str = Field(
         default=dedent(
         """
-        # Role
-        You are a professor who's exceptionally skilled at designing curriculum with high learning potential for students.
+        You are a professor exceptionally skilled at crafting problem with high learning potential for students.
         """
         ).strip(),
         description="The system prompt for the teacher."
@@ -49,11 +61,11 @@ class TeacherPrompt(PromptTemplate):
     task: str = Field(
         default=dedent(
         """
+        # Your Task
+        Design exactly {num_instances} problem from the below curriculum.
+
         # Curriculum Description
         {seed_task}
-
-        # Your Task
-        Now design **{num_instances}** instance aligning with the above curriculum description.
         """
         ).strip(),
         description="The task prompt for the teacher."

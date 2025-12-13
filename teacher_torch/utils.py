@@ -155,6 +155,7 @@ def load_model_tokenizer(
         dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
         device_map=device_map,
     )
+    model = torch.compile(model, mode="max-autotune", dynamic=True)
     logger.debug(f"Model loaded on {model.device}")
     logger.debug(f"Model dtype: {model.dtype}")
     logger.debug(f"Model architecture:\n{model}")

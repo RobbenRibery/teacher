@@ -20,16 +20,19 @@ from dataclasses import dataclass
 from typing import Optional, Any, Callable
 
 import torch
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
 
 from teacher_torch.experience import ExperienceBuffer, Experience
 from teacher_torch.rollout import rollout, RolloutMetric, RolloutConfig
 from teacher_torch.sampling import SamplingOutput
 from teacher_torch.utils import load_model_tokenizer, configure_torch_for_training
 from teacher_torch.policy_gradient import update, GRPOConfig
+
+from environment.reward import CurriculumReward
+
 from curriculum.prompt_template import TeacherPrompt
 from curriculum.tasks import BooleanConstraintsSatisfaction
-from transformers import GenerationConfig
+
 import tyro
 
 
@@ -254,7 +257,7 @@ class GRPOTrainer:
     
     def rollout_teacher(
         self,
-        teacher_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
+        teacher_reward_fn: Optional[Callable[[str], CurriculumReward]] = None,
     ) -> tuple[ExperienceBuffer, RolloutMetric]:
         """Execute teacher rollout phase.
         
@@ -290,6 +293,8 @@ class GRPOTrainer:
             role="teacher",
             solved_threshold=self.config.solved_threshold,
             reward_fn=teacher_reward_fn if teacher_reward_fn is not None else None,
+            logits_minibatch_size=self.config.logits_minibatch_size,
+            only_check_format=teacher_reward_fn is not None,
         )
     
     def rollout_student(

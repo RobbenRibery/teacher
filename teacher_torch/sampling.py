@@ -48,6 +48,7 @@ class SamplingOutput:
     action_mask: torch.BoolTensor
     completions: list[str]
     prompts: list[str]
+    group_size: int
 
     def __str__(self) -> str:
         return (
@@ -59,10 +60,11 @@ class SamplingOutput:
             f"  action_mask: shape={tuple(self.action_mask.shape)}, dtype={self.action_mask.dtype}\n"
             f"  completions: list[str], len={len(self.completions)}\n"
             f"  prompts: list[str], len={len(self.prompts)}\n"
+            f"  group_size: {self.group_size}\n"
             f")"
         )
 
-@torch.no_grad()
+@torch.inference_mode()
 def sample_responses_hf(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
@@ -125,7 +127,7 @@ def sample_responses_hf(
     sequence_attention_mask:torch.IntTensor = (sequence_ids != pad_token_id).long()
 
     return SamplingOutput(
-        num_samples=batch_inputs["input_ids"].shape[0],
+        num_samples=sequence_ids.shape[0],
         input_ids=batch_inputs["input_ids"],
         sequence_attention_mask=sequence_attention_mask,
         sequence_ids=sequence_ids,
@@ -135,4 +137,5 @@ def sample_responses_hf(
             skip_special_tokens=True
         ),
         prompts=prompts,
+        group_size=generation_config.num_return_sequences,
     )

@@ -6,11 +6,12 @@ and package everything into Experience for training.
 """
 from __future__ import annotations
 
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Type
 from dataclasses import dataclass
 
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
+from environment.reward import Reward
 
 from teacher_torch.sampling import SamplingOutput, sample_responses_hf
 from teacher_torch.experience import ExperienceBuffer
@@ -54,14 +55,17 @@ class RolloutMetric:
     mean_completion_len: float
     mean_reward: Optional[float] = None
     std_reward: Optional[float] = None
-    extra_metrics: Optional[dict[str, Any]] = None 
+    mean_solved_rate: Optional[float] = None
+    mean_learnability: Optional[float] = None
+    mean_advantages: Optional[float] = None
+    #extra_metrics: Optional[dict[str, Any]] = None 
 
 
 # Type alias for reward functions
-RewardFn = Callable[[SamplingOutput], dict[str, torch.FloatTensor|Any]]
+RewardFn = Callable[[str], Type[Reward]]
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def rollout(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
@@ -72,6 +76,7 @@ def rollout(
     solved_threshold: float = 1.0,
     reward_fn: Optional[RewardFn] = None,
     logits_minibatch_size: int = 128,
+    only_check_format: bool = False,
 ) -> tuple[ExperienceBuffer, RolloutMetric]:
     """
     Perform a single rollout: sample responses and compute experiences.
@@ -123,8 +128,8 @@ def rollout(
         f"generation_config.num_return_sequences ({generation_config.num_return_sequences}) "
         f"must equal config.group_size ({config.group_size})"
     )
-    batch_size = len(prompts)
-    num_samples = batch_size * config.group_size
+    batch_size = len(prompts) #-> number of unique questions/inputs
+    num_samples = batch_size * config.group_size #-> total number of samples
 
     logger.info(f"# Unique Input Prompts: {batch_size}")
     logger.info(f"# Total Samples: {num_samples}")
@@ -153,84 +158,66 @@ def rollout(
     )
     
     rewards, advantages, learnability = None, None, None
-    if reward_fn is not None:
-        # === Step 3: Compute rewards ===
-        reward_output = reward_fn(sampling_output)
-        rewards:torch.FloatTensor = reward_output["rewards"]  # (num_samples,)
+    reward_outputs: list[Type[Reward]] = [reward_fn(completion) for completion in sampling_output.completions]
+    for i, reward_output in enumerate(reward_outputs):
+        logger.info(f"\033[35mReward output {i}: \n======\n{reward_output}\033[0m")
+
+    rewards:list[float] = [
+        reward.reward for reward in reward_outputs
+    ]
+    if any(reward is None for reward in reward_outputs):
+        raise ValueError("reward_fn must return a Reward object for each completion")
         
-        assert rewards.shape == (num_samples,), (
-            f"reward_fn must return rewards of shape ({num_samples},), got {rewards.shape}"
-        )
-        
-        # === Step 4: Compute group-relative advantages ===
-        # Reshape rewards into groups: (batch_size, group_size)
-        rewards_grouped = rewards.view(batch_size, config.group_size)
-        
-        advantages_grouped = compute_group_advantages(
-            returns=rewards_grouped,
+    rewards:torch.FloatTensor = torch.tensor(rewards, dtype=torch.bfloat16, device=model.device)
+    assert rewards.shape == (num_samples,), (
+        f"reward_fn must return rewards of shape ({num_samples},), got {rewards.shape}"
+    )
+
+    advantages, learnability = None, None
+    mean_solved_rate, mean_learnability, mean_advantages = None, None, None
+    if not only_check_format:
+        # Compute advantages
+        # advantages: (num_samples,)
+        advantages = compute_group_advantages(
+            returns=rewards.view(batch_size, config.group_size),
             normalize=config.normalize_advantages,
             use_rloo_scalar=config.use_rloo_baseline,
         )
-        
-        # Flatten back: (batch_size * group_size,)
-        advantages = advantages_grouped.view(-1)
-        
-        # === Step 5: Package into Experience ===        
-        # learnability: compute based on solved status for each prompt group
-        # Formula: learnability = solved * (1 - solved_mean_in_group)
-        # Shape: (num_samples,) - one per sample
+        # Compute solved rate
         solved_mask = (rewards >= solved_threshold).bool()  # (num_samples,)
-        solved_float = solved_mask.float()  # (num_samples,)
-        
-        # Reshape to groups: (batch_size, group_size)
-        solved_grouped = solved_float.view(batch_size, config.group_size)
-        # Compute mean solved rate per group: (batch_size,)
+        solved_grouped = solved_mask.view(batch_size, config.group_size) # (batch_size, group_size)
         solved_mean_per_group = solved_grouped.mean(dim=1)  # (batch_size,)
-        # Expand back to per-sample: (num_samples,)
-        solved_mean_per_sample = solved_mean_per_group.repeat_interleave(config.group_size)
         
-        # Compute learnability: solved[i] * (1 - mean(solved in group))
-        learnability = solved_float * (1.0 - solved_mean_per_sample)
+        # Compute learnability
+        learnability:torch.FloatTensor = solved_mean_per_group * (1.0 - solved_mean_per_group) # (batch_size,)
 
-        # === Collect metrics ===
-        extra_metrics = {k: v for k, v in reward_output.items() if k != "rewards"}
+        # Compute mean solved rate
+        mean_solved_rate = solved_mask.float().mean().item()
+        mean_learnability = learnability.float().mean().item()
+        mean_advantages = advantages.mean().item()
+
+    # === Collect metrics ===
+    metrics = RolloutMetric(
+        num_samples=num_samples,
+        group_size=config.group_size,
+        mean_entropy=entropy.mean().item() if entropy is not None else 0.0,
+        mean_completion_len=sampling_output.action_mask.sum(dim=1).float().mean().item(),
+        mean_reward=rewards.mean().item(),
+        std_reward=rewards.std().item(),
+        mean_solved_rate=mean_solved_rate,
+        mean_learnability=mean_learnability,
+        mean_advantages=mean_advantages,
+    )
     
-        metrics = RolloutMetric(
-            num_samples=num_samples,
-            group_size=config.group_size,
-            mean_entropy=entropy.mean().item() if entropy is not None else 0.0,
-            mean_completion_len=sampling_output.action_mask.sum(dim=1).float().mean().item(),
-            mean_reward=rewards.mean().item(),
-            std_reward=rewards.std().item(),
-            extra_metrics=extra_metrics,
-        )
-    else:
-        # No reward_fn provided - reward-related metrics are None
-        metrics = RolloutMetric(
-            num_samples=num_samples,
-            group_size=config.group_size,
-            mean_entropy=entropy.mean().item() if entropy is not None else 0.0,
-            mean_completion_len=sampling_output.action_mask.sum(dim=1).float().mean().item(),
-            mean_reward=None,
-            std_reward=None,
-            extra_metrics=None,
-        )
-    
-    # Prepare prompts and completions for ExperienceBuffer
-    # prompts should be unique prompts (one per group), length = batch_size (number of groups)
-    # completions should be flat list of all completions, length = num_samples (total samples)
     experience = ExperienceBuffer.from_sampling_output(
         role=role,
         sampling_output=sampling_output,
         pad_token_id=tokenizer.pad_token_id,
-        group_size=config.group_size,
-        prompts=prompts,
-        completions=sampling_output.completions,
         action_log_probs=action_log_probs,
         rewards=rewards,
         advantages=advantages,
         learnability=learnability,
-        solved_threshold=solved_threshold,
+        only_check_format=only_check_format,
     )
     
     return experience, metrics

@@ -227,7 +227,7 @@ def compute_group_advantages(
         eps (float): The epsilon value to add to the standard deviation to prevent division by zero.
 
     Returns:
-        torch.Tensor: The normalized advantages. (num_samples, num_return_sequences)
+        torch.Tensor: The normalized advantages. (num_samples * group_size,)
     """
     centered_returns = returns - returns.mean(dim=1, keepdim=True)
 
@@ -238,7 +238,7 @@ def compute_group_advantages(
         # unbiased scalar G / (G-1)
         centered_returns = centered_returns * (returns.shape[1] / (returns.shape[1] - 1))
 
-    return centered_returns  
+    return centered_returns.view(-1)  
 
 
 @torch.compile(dynamic=True)

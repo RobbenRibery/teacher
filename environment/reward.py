@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, List
+from functools import partial
+from typing import Optional, List, Callable
 from pydantic import BaseModel, Field
-
+from textwrap import dedent
 from environment.execution import (
     extract_format,
     verify,
@@ -14,13 +15,21 @@ class Reward(BaseModel):
     """
     Reward for the curriculum and answer.
     """
-    reward:float = Field(..., description="Reward for the curriculum and answer.")
+    reward:Optional[float] = Field(None, description="Reward for the curriculum and answer.")
     error:Optional[str] = Field(None, description="Error message if the reward cannot be computed.")
     feedback:Optional[str] = Field(None, description="Feedback for the curriculum and answer.")
 
     @property
     def passed(self) -> bool:
         return self.reward >= 1.0
+
+    @property
+    def format_passed(self) -> bool:
+        ...
+
+    @property
+    def only_format_passed(self) -> bool:
+        ...
 
 
 class CurriculumReward(Reward):
@@ -31,6 +40,32 @@ class CurriculumReward(Reward):
     extracted_curriculum: Optional[str] = Field(None, description="The extracted curriculum.")
     format_only:bool = Field(False, description="Whether to only check the format of the curriculum or to execute the curriculum.")
 
+    @property
+    def format_passed(self) -> bool:
+        if self.format_only:
+            return self.reward >= 1.0
+
+    @property
+    def only_format_passed(self) -> bool:
+        if self.format_only:
+            return self.reward >= 1.0
+        else:
+            return False
+
+    def __str__(self) -> str:
+        return dedent(
+            f"""
+            ===============================
+            Curriculum Reward:
+            - Format Only: {self.format_only}
+            - Reward: {self.reward}
+            - Error: {self.error}
+            - Feedback: {self.feedback}
+            ## Extracted Curriculum
+            {self.extracted_curriculum}
+            ===============================
+            """
+        )
 
 class AnswerReward(Reward):
     """
@@ -71,11 +106,12 @@ def reward_curriculum(
     )
     if not extracted_curriculum:
         return CurriculumReward(
-            curriculum_generation=curriculum_generation,
             extracted_curriculum=extracted_curriculum,
             reward=0.0,
+            curriculum_generation=curriculum_generation,
             error=f"No curriculum satisfying the format {format_regex} extracted from the curriculum generation.",
             feedback=f"Please ensure the curriculum satisfies the format {format_regex}.",
+            format_only=check_format_only,
         )
 
     # run the curriculum with a dummy answer
@@ -90,6 +126,7 @@ def reward_curriculum(
             reward=0.0,
             error=runtime_verification.error,
             feedback=f"Curriculum satisfied the format, however the python code is not runnable.",
+            format_only=check_format_only,
         )
 
     if check_format_only:
@@ -99,7 +136,7 @@ def reward_curriculum(
             reward=1.0,
             error=None,
             feedback=f"The curriculum satisfies the format {format_regex}.",
-            format_only=True,
+            format_only=check_format_only,
         )
     
     if answer_group_rewards is None:
@@ -116,8 +153,16 @@ def reward_curriculum(
         curriculum_generation=curriculum_generation,
         extracted_curriculum=extracted_curriculum,
         reward=uncertainty_reward + diversity_reward,
+        format_only=False,
     )
-    
+
+
+# Partial version that only checks format (does not require answer_group_rewards)
+reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
+    reward_curriculum, 
+    check_format_only=True
+)
+
 
 def reward_answer(
     extracted_curriculum: str,

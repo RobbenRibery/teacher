@@ -6,6 +6,9 @@ from transformers import GenerationConfig
 import tyro
 from dataclasses import dataclass
 
+from environment.reward import (
+    reward_curriculum_format_only
+)
 from teacher_torch.experience import ExperienceBuffer
 from teacher_torch.train_grpo import GRPOTrainer, GRPOConfig
 from teacher_torch.sampling import SamplingOutput
@@ -21,12 +24,12 @@ configure_torch_for_training()
 @dataclass
 class TeacherRolloutArgs:
     """Arguments for testing teacher rollout."""
-    model_name_or_path: str = "Qwen/Qwen3-1.7B"
+    model_name_or_path: str = "Qwen/Qwen3-4B"
     teacher_group_size: int = 4
-    max_new_tokens: int = 4096
-    temperature: float = 1.0
-    top_k: int = 50
-    top_p: float = 1.0
+    max_new_tokens: int = 8192
+    temperature: float = 0.6
+    top_k: int = 20
+    top_p: float = 0.95
     seed: int = 42
 
 def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
@@ -53,8 +56,8 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         top_p=args.top_p,
         do_sample=True,
         num_return_sequences=args.teacher_group_size,
-        cache_implementation="static",
-        repetition_penalty=1.1,
+        cache_implementation="dynamic",
+        repetition_penalty=1.3,
     )
     
     # Create trainer
@@ -64,7 +67,9 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
     print(f"Teacher group size: {args.teacher_group_size}")
     print("Running teacher rollout...")
     
-    teacher_exp, teacher_metrics = trainer.rollout_teacher()
+    teacher_exp, teacher_metrics = trainer.rollout_teacher(
+        teacher_reward_fn=reward_curriculum_format_only,
+    )
     print(f"Number of unique prompts: {len(teacher_exp.prompts)}")
     print(f"Number of completions: {len(teacher_exp.completions)}")
 
@@ -76,6 +81,8 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         for j, completion in enumerate(exp.completions):
             with open(_dir_ / f"completion_{j}.txt", "w") as f:
                 f.write(completion)
+            with open(_dir_ / f"reward_{j}.txt", "w") as f:
+                f.write(str(exp.rewards[j]))
 
 if __name__ == "__main__":
     main()
