@@ -14,6 +14,7 @@ from environment.execution import (
 class Reward(BaseModel):
     """
     Reward for the curriculum and answer.
+    
     """
     reward:Optional[float] = Field(None, description="Reward for the curriculum and answer.")
     error:Optional[str] = Field(None, description="Error message if the reward cannot be computed.")
