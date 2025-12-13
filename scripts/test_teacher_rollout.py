@@ -10,14 +10,20 @@ from teacher_torch.experience import ExperienceBuffer
 from teacher_torch.train_grpo import GRPOTrainer, GRPOConfig
 from teacher_torch.sampling import SamplingOutput
 from teacher_torch.rollout import RolloutMetric
+from teacher_torch.utils import configure_torch_for_training
 from curriculum.tasks import TASKS
+import json
+from pathlib import Path
+
+# Configure torch for bfloat16 training with dynamo optimizations
+configure_torch_for_training()
 
 @dataclass
 class TeacherRolloutArgs:
     """Arguments for testing teacher rollout."""
-    model_name_or_path: str = "Qwen/Qwen3-0.6B"
+    model_name_or_path: str = "Qwen/Qwen3-1.7B"
     teacher_group_size: int = 4
-    max_new_tokens: int = 2048
+    max_new_tokens: int = 4096
     temperature: float = 1.0
     top_k: int = 50
     top_p: float = 1.0
@@ -47,6 +53,8 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         top_p=args.top_p,
         do_sample=True,
         num_return_sequences=args.teacher_group_size,
+        cache_implementation="static",
+        repetition_penalty=1.1,
     )
     
     # Create trainer
@@ -57,7 +65,17 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
     print("Running teacher rollout...")
     
     teacher_exp, teacher_metrics = trainer.rollout_teacher()
+    print(f"Number of unique prompts: {len(teacher_exp.prompts)}")
+    print(f"Number of completions: {len(teacher_exp.completions)}")
+
+    for i, exp in enumerate(teacher_exp):
+        _dir_ = Path(f"data/teacher_{i}")
+        _dir_.mkdir(parents=True, exist_ok=True)
+        with open(_dir_ / "prompt.txt", "w") as f:
+            f.write(exp.prompt)
+        for j, completion in enumerate(exp.completions):
+            with open(_dir_ / f"completion_{j}.txt", "w") as f:
+                f.write(completion)
 
 if __name__ == "__main__":
     main()
-

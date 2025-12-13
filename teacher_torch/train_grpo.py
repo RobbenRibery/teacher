@@ -25,7 +25,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizer
 from teacher_torch.experience import ExperienceBuffer, Experience
 from teacher_torch.rollout import rollout, RolloutMetric, RolloutConfig
 from teacher_torch.sampling import SamplingOutput
-from teacher_torch.utils import load_model_tokenizer
+from teacher_torch.utils import load_model_tokenizer, configure_torch_for_training
 from teacher_torch.policy_gradient import update, GRPOConfig
 from curriculum.prompt_template import TeacherPrompt
 from curriculum.tasks import BooleanConstraintsSatisfaction
@@ -517,6 +517,9 @@ class CliArgs:
 
 def main(args: CliArgs = tyro.cli(CliArgs)) -> None:
     """Main entry point for GRPO training."""
+    # Configure torch for bfloat16 training with dynamo optimizations
+    configure_torch_for_training()
+    
     # Convert CliArgs to GRPOConfig
     config = GRPOConfig(
         model_name_or_path=args.model_name_or_path,

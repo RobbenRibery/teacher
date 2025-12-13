@@ -21,7 +21,7 @@ class Task(BaseModel):
     )
 
     def render(self) -> str:
-        return f"#Name:{self.name}\n#Description: {self.description}\n#Format: {self.format}"
+        return f"#Name:{self.name}\n\n#Description:\n{self.description}\n\n#Format:\n{self.format}"
 
 
 class BooleanConstraintsSatisfaction(Task):
@@ -36,21 +36,22 @@ class BooleanConstraintsSatisfaction(Task):
     
     description: str = dedent(
     """
-    ## Core task objective:
-    Any problem belongs to the task is defined by a set of executable boolean constraints about a single variable "x".
-    To solve a problem designed, a student must write Python code to derive a particular value of "x", which meets all constraints imposed.
+    ## Core Curriculum Objective:
+    Each instance in this curriculum is defined by a set of executable boolean constraints about a single variable "x".
+    To solve an instance, a student must write Python code to derive a particular value of "x" that meets all constraints imposed.
 
     # Properties of the task:
-    * Any problem designed must be solveable.
-    * The student must be able to exercise sophisticated logical reasoning, math and programming skills to solve problems that you've designed.
+    * Any instance designed must be solvable.
+    * The student must be able to exercise sophisticated logical reasoning, math, and programming skills to solve the instances you design.
     """
     ).strip()
 
     format: str = dedent(
     """
-    For each problem created belonging to the task, put your final designed problem inside the <answer> tag. DO NOT provide the solution/any hint. 
+    For each instance you create, put your final designed instance inside the <answer> tag. DO NOT provide the solution or any hints.
+    Example format for the final answer:
     <answer>
-    Write Python code to derive a particular value of "x" which meets all constraints imposed:
+    Write Python code to derive a particular value of "x" that meets all constraints imposed:
     ```python
     constraints = [
         lambda x: ...,

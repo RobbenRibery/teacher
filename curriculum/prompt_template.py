@@ -40,7 +40,7 @@ class TeacherPrompt(PromptTemplate):
         default=dedent(
         """
         # Role
-        You are a professor who's exceptionally skilled at designing diverse problems with high learning potential for students, given the following task.
+        You are a professor who's exceptionally skilled at designing curriculum with high learning potential for students.
         """
         ).strip(),
         description="The system prompt for the teacher."
@@ -49,10 +49,11 @@ class TeacherPrompt(PromptTemplate):
     task: str = Field(
         default=dedent(
         """
-        # Task
+        # Curriculum Description
         {seed_task}
 
-        Now design {num_instances} problems originated from the above task.
+        # Your Task
+        Now design **{num_instances}** instance aligning with the above curriculum description.
         """
         ).strip(),
         description="The task prompt for the teacher."

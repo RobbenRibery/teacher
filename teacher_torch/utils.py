@@ -83,6 +83,30 @@ def release_memory(vars:List[Any]):
     gc.collect()
     torch.cuda.empty_cache()    
 
+
+def configure_torch_for_training():
+    """Configure torch for bfloat16 training with dynamo optimizations.
+    
+    This function sets up:
+    1. Default dtype to bfloat16 for new tensors
+    2. Dynamo scalar output capture to avoid graph breaks from .item() calls
+       (required because transformers flash attention uses .item() internally)
+    3. Float32 matmul precision to 'high' to silence TF32 warnings
+    """
+    # Ensure bfloat16 as default dtype for new tensors
+    torch.set_default_dtype(torch.bfloat16)
+    
+    # Enable scalar output capture to avoid graph breaks from .item() calls
+    # (required because transformers flash attention uses .item() internally)
+    torch._dynamo.config.capture_scalar_outputs = True
+    
+    # Silence the TF32 warning by setting matmul precision
+    # (only affects float32 ops, which we avoid, but silences the warning)
+    torch.set_float32_matmul_precision('high')
+    
+    logger.info("Configured torch for bfloat16 training with dynamo optimizations")
+
+
 def load_model_tokenizer(
     model_name_or_path: str,
     trust_remote_code: bool = True,

@@ -14,7 +14,7 @@ class Experience:
     The sequence length is the length of the sequences in the batch.
     """
     prompt: str
-    completion: list[str]
+    completions: list[str]
     role:str
     pad_token_id:int
 
@@ -60,6 +60,14 @@ class ExperienceBuffer:
     @property
     def num_unique_prompts(self) -> int:
         return len(set(exp.prompt for exp in self.experiences))
+
+    @property
+    def completions(self) -> list[str]:
+        return [comp for exp in self.experiences for comp in exp.completions]
+    
+    @property
+    def prompts(self) -> list[str]:
+        return [exp.prompt for exp in self.experiences]
 
     def __len__(self) -> int:
         return len(self.experiences)
@@ -204,7 +212,7 @@ class ExperienceBuffer:
             
             experience = Experience(
                 prompt=prompts[i],
-                completion=group_completions,
+                completions=group_completions,
                 role=role,
                 pad_token_id=pad_token_id,
                 sequences=group_sequences.to("cpu"),
