@@ -87,6 +87,14 @@ def verify(code: str, variable_assignment: Any) -> VerificationResult:
         
         if not isinstance(constraints, list):
             return VerificationResult(correct=False, error="Curriculum must define a 'constraints' list.")
+
+        # Check that all constraints use 'x' as the variable name
+        for constraint in constraints:
+            if hasattr(constraint, "__code__"):
+                if constraint.__code__.co_argcount != 1:
+                    return VerificationResult(correct=False, error="Each constraint must take exactly one argument.")
+                if constraint.__code__.co_varnames[0] != "x":
+                    return VerificationResult(correct=False, error=f"Constraint argument must be named 'x', found '{constraint.__code__.co_varnames[0]}'.")
             
         for constraint in constraints:
             try:

@@ -136,12 +136,14 @@ def load_model_tokenizer(
 
     # Determine attention implementation and model class
     attn_implementation = "eager"
+    logger.info(f"Defaulting to Eager Attention for model {model_name_or_path}")
     ModelClass = AutoModelForCausalLM
 
     if use_cuda:
         major_version, _ = torch.cuda.get_device_capability()
         if major_version >= 8 and HAS_FLASH_ATTN:
             attn_implementation = "flash_attention_2"
+            logger.info(f"Using Flash Attention 2 for model {model_name_or_path}")
         
         if HAS_LIGER:
             ModelClass = AutoLigerKernelForCausalLM

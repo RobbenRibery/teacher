@@ -9,11 +9,6 @@ from transformers import (
     set_seed,
 )
 from teacher_torch.utils import setup_logger_with_file_line    
-from transformers import LogitsProcessor
-
-class Float32LogitsProcessor(LogitsProcessor):
-    def __call__(self, input_ids, scores):
-        return scores.float()  # Upcast to fp32
 
 logger = setup_logger_with_file_line(__name__)
 
@@ -121,7 +116,6 @@ def sample_responses_hf(
     sequence_ids:torch.IntTensor = model.generate(
         input_ids=batch_inputs["input_ids"].to(model.device),
         attention_mask=batch_inputs["attention_mask"].to(model.device),
-        logits_processor=Float32LogitsProcessor(),
         **generation_config.to_dict()
     )
 

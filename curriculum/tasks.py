@@ -63,6 +63,7 @@ class BooleanConstraintsSatisfaction(Task):
     ]
     ```
     </answer>
+    Terminate immediately after the first <answer> tag.
     """
     ).strip()
 

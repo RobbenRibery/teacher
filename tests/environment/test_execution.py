@@ -112,6 +112,30 @@ def test_verify_multiple_constraints():
     result = verify(curriculum, 15)
     assert result.correct is False
 
+def test_verify_variable_name_validation():
+    """Test validation of variable names in constraints."""
+    # Invalid: constraint argument named 'y' instead of 'x'
+    curriculum = "constraints = [lambda y: y > 0]"
+    result = verify(curriculum, 5)
+    assert result.correct is False
+    assert result.error is not None
+    assert "Constraint argument must be named 'x'" in result.error
+    assert "found 'y'" in result.error
+
+    # Invalid: multiple arguments
+    curriculum = "constraints = [lambda x, y: x > y]"
+    result = verify(curriculum, 5)
+    assert result.correct is False
+    assert result.error is not None
+    assert "Each constraint must take exactly one argument" in result.error
+
+    # Invalid: mixed valid and invalid variable names
+    curriculum = "constraints = [lambda x: x > 0, lambda y: y < 10]"
+    result = verify(curriculum, 5)
+    assert result.correct is False
+    assert result.error is not None
+    assert "Constraint argument must be named 'x'" in result.error
+
 
 # Test cases for extract_answer function
 # Regex format: matches ```python followed by anything until ```

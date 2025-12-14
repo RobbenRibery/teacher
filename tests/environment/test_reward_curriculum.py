@@ -56,7 +56,8 @@ def test_reward_curriculum_valid_format_only():
 
     assert result.passed is True
     assert result.extracted_curriculum is not None
-    expected_curriculum = """constraints = [
+    expected_curriculum = """# Write Python code to derive a particular value of "x" which meets all constraints imposed:
+constraints = [
     lambda x: x % 2 == 0,
     lambda x: (x + 1) % 3 == 0,
     lambda x: (x - 1) % 5 == 0
