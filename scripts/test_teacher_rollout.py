@@ -65,7 +65,6 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         cache_implementation="dynamic",
         repetition_penalty=1.3,
         renormalize_logits = True,  
-        logits_processor=[Float32LogitsProcessor()],
     )
     
     # Create trainer
