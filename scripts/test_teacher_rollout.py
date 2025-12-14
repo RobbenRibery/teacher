@@ -18,6 +18,12 @@ from curriculum.tasks import TASKS
 import json
 from pathlib import Path
 
+from transformers import LogitsProcessor
+
+class Float32LogitsProcessor(LogitsProcessor):
+    def __call__(self, input_ids, scores):
+        return scores.float()  # Upcast to fp32
+
 # Configure torch for bfloat16 training with dynamo optimizations
 configure_torch_for_training()
 
@@ -59,6 +65,7 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         cache_implementation="dynamic",
         repetition_penalty=1.3,
         renormalize_logits = True,  
+        logits_processor=[Float32LogitsProcessor()],
     )
     
     # Create trainer
