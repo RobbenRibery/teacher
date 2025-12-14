@@ -5,23 +5,17 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
-    "jax",
-    "jaxlib",
-    "optax",
-    "flax",
     "transformers",
     "datasets",
     "tqdm",
     "matplotlib",
     "seaborn",
     "scikit-learn",
-    "google-tunix",
     "pydantic-ai>=1.25.1",
     "tyro>=0.9.35",
     "torch>=2.8.0",
     "liger-kernel",
-    "accelerate",
-    "flash-attn>=2.8.3"
+    "accelerate"
 ]
 
 [project.optional-dependencies]
@@ -32,8 +26,11 @@ logging = ["colorlog"]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["environment", "curriculum", "teacher_torch"]
+
 [tool.uv]
-package = false
+package = true
 
 [tool.uv.extra-build-dependencies]
 flash-attn = ["torch", "setuptools", "packaging", "ninja", "psutil"]
