@@ -49,7 +49,7 @@ class BooleanConstraintsSatisfaction(Task):
     format: str = dedent(
     """
     Put your final designed problem inside the <answer> tag and don't include solution or hints inside the final answer.
-    Example Format: 
+    Use the following format for think and answer. 
     <think>
     ...
     </think>
@@ -62,8 +62,7 @@ class BooleanConstraintsSatisfaction(Task):
         ...
     ]
     ```
-    </answer>
-    Terminate immediately after the first <answer> tag.
+    </answer> (terminate here and no further rounds)
     """
     ).strip()
 

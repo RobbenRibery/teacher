@@ -23,13 +23,15 @@ configure_torch_for_training()
 @dataclass
 class TeacherRolloutArgs:
     """Arguments for testing teacher rollout."""
-    model_name_or_path: str = "Qwen/Qwen3-4B"
+    model_name_or_path: str = "Qwen/Qwen3-4B-Thinking-2507"
     teacher_group_size: int = 4
     max_new_tokens: int = 8192
     temperature: float = 0.6
     top_k: int = 20
     top_p: float = 0.95
+    min_p: float = 0.0
     seed: int = 42
+    repetition_penalty: float = 1
 
 def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
     """Test teacher rollout."""
@@ -45,6 +47,7 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
+        #repetition_penalty=args.repetition_penalty,
     )
     
     # Create teacher generation config with sampling parameters
@@ -53,10 +56,12 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
+        min_p=args.min_p,
         do_sample=True,
         num_return_sequences=args.teacher_group_size,
         cache_implementation="dynamic",
-        repetition_penalty=1.3,
+        repetition_penalty=args.repetition_penalty,
+        stop_strings=["</answer>", "Human: ", "</answer>\n"],
     )
     
     # Create trainer

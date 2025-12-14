@@ -155,6 +155,8 @@ def load_model_tokenizer(
         # training padding should be on the left
         tokenizer.padding_side = "left"
 
+    logger.info(f"Special Token IDs: {tokenizer.special_tokens_map}")
+
     model: PreTrainedModel = ModelClass.from_pretrained(
         model_name_or_path if checkpoint_path is None else checkpoint_path,
         trust_remote_code=trust_remote_code,

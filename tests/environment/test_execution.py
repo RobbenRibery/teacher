@@ -32,6 +32,8 @@ def test_verify_success_simple():
     result = verify(curriculum, 6)
     assert result.correct is True
     assert result.error is None
+    assert result.feedback is not None
+    assert "All constraints are satisfied" in result.feedback
 
 def test_verify_failure_simple():
     """Test simple boolean constraints that should fail."""
@@ -40,6 +42,8 @@ def test_verify_failure_simple():
     result = verify(curriculum, 4)
     assert result.correct is False
     assert result.error is None
+    assert result.feedback is not None
+    assert "not satisfied" in result.feedback
 
 def test_verify_complex_logic():
     """Test complex boolean logic."""
@@ -108,9 +112,13 @@ def test_verify_multiple_constraints():
     curriculum = "constraints = [lambda x: x > 0, lambda x: x < 10]"
     result = verify(curriculum, 5)
     assert result.correct is True
+    assert result.feedback is not None
+    assert "All constraints are satisfied" in result.feedback
     
     result = verify(curriculum, 15)
     assert result.correct is False
+    assert result.feedback is not None
+    assert "not satisfied" in result.feedback
 
 def test_verify_variable_name_validation():
     """Test validation of variable names in constraints."""

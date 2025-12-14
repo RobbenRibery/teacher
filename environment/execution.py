@@ -6,7 +6,7 @@ import itertools
 import collections
 import signal 
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 from pydantic import BaseModel, Field
 
 try:
@@ -55,6 +55,7 @@ class VerificationResult(BaseModel):
     """
     correct: bool = Field(..., description="Whether the code is correct according to the constraints.")
     error: Optional[str] = Field(None, description="Traceback if the execution failed.")
+    feedback: Optional[str] = Field(None, description="Feedback about constraint satisfaction.")
 
 class ExecutionResult(BaseModel):
     """
@@ -95,18 +96,21 @@ def verify(code: str, variable_assignment: Any) -> VerificationResult:
                     return VerificationResult(correct=False, error="Each constraint must take exactly one argument.")
                 if constraint.__code__.co_varnames[0] != "x":
                     return VerificationResult(correct=False, error=f"Constraint argument must be named 'x', found '{constraint.__code__.co_varnames[0]}'.")
-            
-        for constraint in constraints:
+        
+        satisfied_constraints:list[Callable] = []
+        for _, constraint in enumerate(constraints):
             try:
                 with time_limit(30):
                     if not constraint(variable_assignment):
-                        return VerificationResult(correct=False, error=None)
+                        return VerificationResult(correct=False, error=None, feedback=f"Constraint {constraint} is not satisfied.")
+                    else:
+                        satisfied_constraints.append(constraint)
             except TimeoutException:
                 return VerificationResult(correct=False, error="Execution timed out during constraint checking.")
             except Exception:
                 return VerificationResult(correct=False, error=traceback.format_exc())
         
-        return VerificationResult(correct=True, error=None)
+        return VerificationResult(correct=True, error=None, feedback=f"All constraints are satisfied.")
         
     except TimeoutException:
         return VerificationResult(correct=False, error="Execution timed out during curriculum definition.")

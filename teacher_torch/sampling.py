@@ -116,6 +116,7 @@ def sample_responses_hf(
     sequence_ids:torch.IntTensor = model.generate(
         input_ids=batch_inputs["input_ids"].to(model.device),
         attention_mask=batch_inputs["attention_mask"].to(model.device),
+        tokenizer=tokenizer,
         **generation_config.to_dict()
     )
 
