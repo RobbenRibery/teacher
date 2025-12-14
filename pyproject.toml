@@ -36,7 +36,7 @@ build-backend = "setuptools.build_meta"
 package = false
 
 [tool.uv.extra-build-dependencies]
-flash-attn = ["torch", "setuptools", "packaging", "ninja"]
+flash-attn = ["torch", "setuptools", "packaging", "ninja", "psutil"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
