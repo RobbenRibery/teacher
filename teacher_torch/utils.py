@@ -8,6 +8,11 @@ try:
 except ImportError:
     HAS_LIGER = False
 try:
+    import flash_attn
+    HAS_FLASH_ATTN = True
+except ImportError:
+    HAS_FLASH_ATTN = False
+try:
     import colorlog
     HAS_COLORLOG = True
 except ImportError:
@@ -135,7 +140,7 @@ def load_model_tokenizer(
 
     if use_cuda:
         major_version, _ = torch.cuda.get_device_capability()
-        if major_version >= 8:
+        if major_version >= 8 and HAS_FLASH_ATTN:
             attn_implementation = "flash_attention_2"
         
         if HAS_LIGER:

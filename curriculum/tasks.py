@@ -54,8 +54,8 @@ class BooleanConstraintsSatisfaction(Task):
     ...
     </think>
     <answer>
-    Write Python code to derive a particular value of "x" that meets all constraints imposed:
     ```python
+    # Write Python code to derive a particular value of "x" that meets all constraints imposed:
     constraints = [
         lambda x: ...,
         lambda x: ...,

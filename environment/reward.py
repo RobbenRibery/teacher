@@ -80,7 +80,7 @@ def reward_curriculum(
     curriculum_generation: str, 
     answer_group_rewards:Optional[list[AnswerReward]] = None, 
     check_format_only: bool = False, 
-    format_regex:str = r"<think>.*?</think>.*?<answer>.*?```python\n(.*?)\n```.*?</answer>",
+    format_regex:str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
@@ -168,7 +168,7 @@ reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
 def reward_answer(
     extracted_curriculum: str,
     answer_generation: str, 
-    format_regex:str = r"<think>.*?</think>.*?<answer>.*?```python\n(.*?)\n```.*?</answer>",
+    format_regex:str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
@@ -247,7 +247,7 @@ async def _reward_answer_async(
 async def reward_answer_group(
     extracted_curriculum: str,
     answer_generations: List[str],
-    format_regex: str = r"<think>.*?</think>.*?<answer>.*?```python\n(.*?)\n```.*?</answer>",
+    format_regex: str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,

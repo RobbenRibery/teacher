@@ -15,12 +15,8 @@ dependencies = [
     "tyro>=0.9.35",
     "torch>=2.8.0",
     "liger-kernel",
-<<<<<<< HEAD
-    "accelerate"
-=======
     "accelerate",
     "flash-attn>=2.8.3",
->>>>>>> 6933ddf (remove mamba)
 ]
 
 [project.optional-dependencies]
