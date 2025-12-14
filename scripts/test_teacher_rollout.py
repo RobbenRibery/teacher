@@ -58,6 +58,7 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         num_return_sequences=args.teacher_group_size,
         cache_implementation="dynamic",
         repetition_penalty=1.3,
+        renormalize_logits = True,  
     )
     
     # Create trainer
