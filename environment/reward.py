@@ -11,35 +11,47 @@ from environment.execution import (
     execute_answer,
 )
 
+
 class Reward(BaseModel):
     """
     Reward for the curriculum and answer.
-    
+
     """
-    reward:Optional[float] = Field(None, description="Reward for the curriculum and answer.")
-    error:Optional[str] = Field(None, description="Error message if the reward cannot be computed.")
-    feedback:Optional[str] = Field(None, description="Feedback for the curriculum and answer.")
+
+    reward: Optional[float] = Field(
+        None, description="Reward for the curriculum and answer."
+    )
+    error: Optional[str] = Field(
+        None, description="Error message if the reward cannot be computed."
+    )
+    feedback: Optional[str] = Field(
+        None, description="Feedback for the curriculum and answer."
+    )
 
     @property
     def passed(self) -> bool:
         return self.reward >= 1.0
 
     @property
-    def format_passed(self) -> bool:
-        ...
+    def format_passed(self) -> bool: ...
 
     @property
-    def only_format_passed(self) -> bool:
-        ...
+    def only_format_passed(self) -> bool: ...
 
 
 class CurriculumReward(Reward):
     """
     Reward for the curriculum.
     """
+
     curriculum_generation: str = Field(..., description="The curriculum generation.")
-    extracted_curriculum: Optional[str] = Field(None, description="The extracted curriculum.")
-    format_only:bool = Field(False, description="Whether to only check the format of the curriculum or to execute the curriculum.")
+    extracted_curriculum: Optional[str] = Field(
+        None, description="The extracted curriculum."
+    )
+    format_only: bool = Field(
+        False,
+        description="Whether to only check the format of the curriculum or to execute the curriculum.",
+    )
 
     @property
     def format_passed(self) -> bool:
@@ -68,19 +80,21 @@ class CurriculumReward(Reward):
             """
         )
 
+
 class AnswerReward(Reward):
     """
     Reward for the answer.
     """
+
     answer_generation: str = Field(..., description="The answer generation.")
     extracted_answer: Optional[str] = Field(None, description="The extracted answer.")
 
 
 def reward_curriculum(
-    curriculum_generation: str, 
-    answer_group_rewards:Optional[list[AnswerReward]] = None, 
-    check_format_only: bool = False, 
-    format_regex:str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
+    curriculum_generation: str,
+    answer_group_rewards: Optional[list[AnswerReward]] = None,
+    check_format_only: bool = False,
+    format_regex: str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
@@ -99,11 +113,11 @@ def reward_curriculum(
     Returns:
         Reward: The reward for the curriculum and answer.
     """
-    ## check the format 
+    ## check the format
     extracted_curriculum = extract_format(
-        text=curriculum_generation, 
-        regex_format=format_regex, 
-        use_last_match=use_last_match
+        text=curriculum_generation,
+        regex_format=format_regex,
+        use_last_match=use_last_match,
     )
     if not extracted_curriculum:
         return CurriculumReward(
@@ -116,10 +130,7 @@ def reward_curriculum(
         )
 
     # run the curriculum with a dummy answer
-    runtime_verification = verify(
-        code=extracted_curriculum,
-        variable_assignment=1
-    )
+    runtime_verification = verify(code=extracted_curriculum, variable_assignment=1)
     if runtime_verification.error is not None:
         return CurriculumReward(
             curriculum_generation=curriculum_generation,
@@ -139,16 +150,20 @@ def reward_curriculum(
             feedback=f"The curriculum satisfies the format {format_regex}.",
             format_only=check_format_only,
         )
-    
-    if answer_group_rewards is None:
-        raise ValueError("answer_group_rewards is required when check_format_only is False")
 
-    solved_rate:float = [answer_reward.passed for answer_reward in answer_group_rewards].count(True) / len(answer_group_rewards)
-    uncertainty_reward:float = solved_rate * (1-solved_rate)
+    if answer_group_rewards is None:
+        raise ValueError(
+            "answer_group_rewards is required when check_format_only is False"
+        )
+
+    solved_rate: float = [
+        answer_reward.passed for answer_reward in answer_group_rewards
+    ].count(True) / len(answer_group_rewards)
+    uncertainty_reward: float = solved_rate * (1 - solved_rate)
 
     # diversity reward
     # TODO: implement diversity reward
-    diversity_reward:float = 0.0
+    diversity_reward: float = 0.0
 
     return CurriculumReward(
         curriculum_generation=curriculum_generation,
@@ -160,15 +175,14 @@ def reward_curriculum(
 
 # Partial version that only checks format (does not require answer_group_rewards)
 reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
-    reward_curriculum, 
-    check_format_only=True
+    reward_curriculum, check_format_only=True
 )
 
 
 def reward_answer(
     extracted_curriculum: str,
-    answer_generation: str, 
-    format_regex:str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
+    answer_generation: str,
+    format_regex: str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
@@ -178,23 +192,20 @@ def reward_answer(
     """
     # check the format
     extracted_answer = extract_format(
-        text=answer_generation,
-        regex_format=format_regex,
-        use_last_match=use_last_match
+        text=answer_generation, regex_format=format_regex, use_last_match=use_last_match
     )
     if not extracted_answer:
         return AnswerReward(
             answer_generation=answer_generation,
             extracted_answer=extracted_answer,
             reward=0.0,
-            error=f"No answer satisfying the format {format_regex} extracted from the answer generation.",  
+            error=f"No answer satisfying the format {format_regex} extracted from the answer generation.",
             feedback=f"Please ensure the answer satisfies the format {format_regex}.",
         )
 
     # execute the answer
     execution_result = execute_answer(
-        extracted_answer=extracted_answer,
-        variable_name=variable_name
+        extracted_answer=extracted_answer, variable_name=variable_name
     )
     if execution_result.value is None:
         return AnswerReward(
@@ -206,8 +217,7 @@ def reward_answer(
         )
 
     verification_result = verify(
-        code=extracted_curriculum,
-        variable_assignment=execution_result.value
+        code=extracted_curriculum, variable_assignment=execution_result.value
     )
     if verification_result.error is not None:
         return AnswerReward(

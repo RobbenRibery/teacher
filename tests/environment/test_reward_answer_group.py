@@ -94,4 +94,3 @@ def test_reward_answer_group_mixed_results():
     assert results[2].passed is False
     assert results[2].reward == 0.0
     assert results[2].error is None
-

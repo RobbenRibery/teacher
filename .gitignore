@@ -206,6 +206,9 @@ $RECYCLE.BIN/
 *.pt
 *.pth
 *.weights
+*.ipynb
+pyproject_local.toml
+
 data/
 models/
 checkpoints/

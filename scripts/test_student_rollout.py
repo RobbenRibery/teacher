@@ -1,4 +1,5 @@
 """Test script for student rollout."""
+
 from __future__ import annotations
 
 import torch
@@ -13,6 +14,7 @@ from teacher_torch.sampling import SamplingOutput
 @dataclass
 class StudentRolloutArgs:
     """Arguments for testing student rollout."""
+
     model_name_or_path: str = "Qwen/Qwen3-0.6B"
     student_group_size: int = 4
     max_new_tokens: int = 512
@@ -40,7 +42,7 @@ def main(args: StudentRolloutArgs = tyro.cli(StudentRolloutArgs)) -> None:
     print("=" * 60)
     print("Testing Student Rollout")
     print("=" * 60)
-    
+
     # Create config
     config = GRPOConfig(
         model_name_or_path=args.model_name_or_path,
@@ -49,20 +51,20 @@ def main(args: StudentRolloutArgs = tyro.cli(StudentRolloutArgs)) -> None:
         temperature=args.temperature,
         top_p=args.top_p,
     )
-    
+
     # Create trainer
     trainer = GRPOTrainer(config, seed=args.seed)
-    
+
     # Test student rollout
     print(f"\nCurriculum:\n{args.curriculum}\n")
     print(f"Student group size: {args.student_group_size}")
     print("Running student rollout...")
-    
+
     student_exp, student_metrics = trainer.rollout_student(
         prompts=[args.curriculum],
         student_reward_fn=dummy_student_reward_fn,
     )
-    
+
     print("\n" + "=" * 60)
     print("Results:")
     print("=" * 60)
@@ -71,7 +73,7 @@ def main(args: StudentRolloutArgs = tyro.cli(StudentRolloutArgs)) -> None:
     print(f"Std reward: {student_metrics.std_reward:.4f}")
     print(f"Mean entropy: {student_metrics.mean_entropy:.4f}")
     print(f"Mean completion length: {student_metrics.mean_completion_len:.2f}")
-    
+
     if student_exp.experiences:
         exp = student_exp.experiences[0]
         print(f"\nFirst experience:")
@@ -85,4 +87,3 @@ def main(args: StudentRolloutArgs = tyro.cli(StudentRolloutArgs)) -> None:
 
 if __name__ == "__main__":
     main()
-

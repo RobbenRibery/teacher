@@ -1,19 +1,28 @@
 import gc
 import logging
 from typing import Optional, List, Any
-from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, AutoModelForCausalLM
+from transformers import (
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizer,
+    AutoModelForCausalLM,
+)
+
 try:
     from liger_kernel.transformers import AutoLigerKernelForCausalLM
+
     HAS_LIGER = True
 except ImportError:
     HAS_LIGER = False
 try:
     import flash_attn
+
     HAS_FLASH_ATTN = True
 except ImportError:
     HAS_FLASH_ATTN = False
 try:
     import colorlog
+
     HAS_COLORLOG = True
 except ImportError:
     HAS_COLORLOG = False
@@ -22,22 +31,20 @@ import rich
 
 
 def setup_logger_with_file_line(
-    logger_name: str, 
-    level: int = logging.INFO,
-    use_colors: Optional[bool] = None
+    logger_name: str, level: int = logging.INFO, use_colors: Optional[bool] = None
 ) -> logging.Logger:
     """
     Configure a logger to include filename and line number in log messages.
     Optionally uses colored output via colorlog if available.
-    
+
     Args:
         logger_name: Name of the logger (typically __name__ from the calling module).
         level: Logging level (default: logging.INFO).
         use_colors: Whether to use colored output. If None, uses colors if colorlog is available.
-    
+
     Returns:
         Configured logger instance.
-    
+
     Example:
         >>> logger = setup_logger_with_file_line(__name__)
         >>> logger.info("This will show filename and line number with colors")
@@ -45,53 +52,59 @@ def setup_logger_with_file_line(
         >>> logger.info("This will show filename and line number without colors")
     """
     logger = logging.getLogger(logger_name)
-    
+
     # Only configure if handler doesn't already exist
     if not logger.handlers:
         handler = logging.StreamHandler()
-        
+
         # Determine if we should use colors
-        should_use_colors = use_colors if use_colors is not None else (HAS_COLORLOG and handler.stream.isatty())
-        
+        should_use_colors = (
+            use_colors
+            if use_colors is not None
+            else (HAS_COLORLOG and handler.stream.isatty())
+        )
+
         if should_use_colors and HAS_COLORLOG:
             # Use colorlog for colored output
             formatter = colorlog.ColoredFormatter(
-                '%(log_color)s%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S',
+                "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
                 log_colors={
-                    'DEBUG': 'cyan',
-                    'INFO': 'green',
-                    'WARNING': 'yellow',
-                    'ERROR': 'red',
-                    'CRITICAL': 'red,bg_white',
+                    "DEBUG": "cyan",
+                    "INFO": "green",
+                    "WARNING": "yellow",
+                    "ERROR": "red",
+                    "CRITICAL": "red,bg_white",
                 },
                 secondary_log_colors={},
-                style='%'
+                style="%",
             )
         else:
             # Fallback to regular formatter
             formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+                "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
             )
-        
+
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.setLevel(level)
-    
+
     return logger
+
 
 logger = setup_logger_with_file_line(__name__)
 
-def release_memory(vars:List[Any]):
+
+def release_memory(vars: List[Any]):
     for var in vars:
         del var
     gc.collect()
-    torch.cuda.empty_cache()    
+    torch.cuda.empty_cache()
 
 
 def configure_torch_for_training():
     """Configure torch for bfloat16 training with dynamo optimizations.
-    
+
     This function sets up:
     1. Default dtype to bfloat16 for new tensors
     2. Dynamo scalar output capture to avoid graph breaks from .item() calls
@@ -100,15 +113,15 @@ def configure_torch_for_training():
     """
     # Ensure bfloat16 as default dtype for new tensors
     torch.set_default_dtype(torch.bfloat16)
-    
+
     # Enable scalar output capture to avoid graph breaks from .item() calls
     # (required because transformers flash attention uses .item() internally)
     torch._dynamo.config.capture_scalar_outputs = True
-    
+
     # Silence the TF32 warning by setting matmul precision
     # (only affects float32 ops, which we avoid, but silences the warning)
-    torch.set_float32_matmul_precision('high')
-    
+    torch.set_float32_matmul_precision("high")
+
     logger.info("Configured torch for bfloat16 training with dynamo optimizations")
 
 
@@ -144,7 +157,7 @@ def load_model_tokenizer(
         if major_version >= 8 and HAS_FLASH_ATTN:
             attn_implementation = "flash_attention_2"
             logger.info(f"Using Flash Attention 2 for model {model_name_or_path}")
-        
+
         if HAS_LIGER:
             ModelClass = AutoLigerKernelForCausalLM
             logger.info(f"Using LigerKernel for model {model_name_or_path}")
@@ -179,17 +192,17 @@ def load_model_tokenizer(
 def expand_prompts_for_group(prompts: list[str], group_size: int) -> list[str]:
     """
     Expand prompts by repeating each prompt group_size times.
-    
+
     Useful when you want to manually control batching instead of using
     num_return_sequences in generation_config.
-    
+
     Args:
         prompts: Original list of prompts.
         group_size: Number of times to repeat each prompt.
-    
+
     Returns:
         Expanded list where each prompt appears group_size times consecutively.
-    
+
     Example:
         >>> expand_prompts_for_group(["a", "b"], group_size=3)
         ["a", "a", "a", "b", "b", "b"]

@@ -1,4 +1,5 @@
 """Test script for teacher update."""
+
 from __future__ import annotations
 
 import torch
@@ -13,6 +14,7 @@ from teacher_torch.sampling import SamplingOutput
 @dataclass
 class TeacherUpdateArgs:
     """Arguments for testing teacher update."""
+
     model_name_or_path: str = "Qwen/Qwen3-0.6B"
     teacher_group_size: int = 4
     max_new_tokens: int = 512
@@ -46,7 +48,7 @@ def main(args: TeacherUpdateArgs = tyro.cli(TeacherUpdateArgs)) -> None:
     print("=" * 60)
     print("Testing Teacher Update")
     print("=" * 60)
-    
+
     # Create config
     config = GRPOConfig(
         model_name_or_path=args.model_name_or_path,
@@ -62,13 +64,15 @@ def main(args: TeacherUpdateArgs = tyro.cli(TeacherUpdateArgs)) -> None:
         mini_batch_size=args.mini_batch_size,
         logits_minibatch_size=args.logits_minibatch_size,
     )
-    
+
     # Create trainer
     trainer = GRPOTrainer(config, seed=args.seed)
-    
+
     # Get initial model state for comparison
-    initial_params = {name: param.clone() for name, param in trainer.model.named_parameters()}
-    
+    initial_params = {
+        name: param.clone() for name, param in trainer.model.named_parameters()
+    }
+
     # Run teacher rollout to get experience
     print(f"\nSeed task:\n{args.seed_task}\n")
     print("Running teacher rollout...")
@@ -76,15 +80,15 @@ def main(args: TeacherUpdateArgs = tyro.cli(TeacherUpdateArgs)) -> None:
         seed_tasks=[args.seed_task],
         teacher_reward_fn=dummy_teacher_reward_fn,
     )
-    
+
     print(f"Rollout metrics:")
     print(f"  Mean reward: {teacher_rollout_metrics.mean_reward:.4f}")
     print(f"  Mean entropy: {teacher_rollout_metrics.mean_entropy:.4f}")
-    
+
     # Run teacher update
     print("\nRunning teacher update...")
     from teacher_torch.policy_gradient import update
-    
+
     teacher_train_metrics = update(
         model=trainer.model,
         ref_model=trainer.ref_model,
@@ -93,7 +97,7 @@ def main(args: TeacherUpdateArgs = tyro.cli(TeacherUpdateArgs)) -> None:
         config=config,
         device=trainer.device,
     )
-    
+
     print("\n" + "=" * 60)
     print("Update Results:")
     print("=" * 60)
@@ -101,7 +105,7 @@ def main(args: TeacherUpdateArgs = tyro.cli(TeacherUpdateArgs)) -> None:
     print(f"Mean KL: {teacher_train_metrics.mean_kl:.6f}")
     print(f"Policy loss: {teacher_train_metrics.policy_loss:.6f}")
     print(f"Grad norm: {teacher_train_metrics.grad_norm:.6f}")
-    
+
     # Check if parameters changed
     param_changed = False
     for name, initial_param in initial_params.items():
@@ -109,10 +113,9 @@ def main(args: TeacherUpdateArgs = tyro.cli(TeacherUpdateArgs)) -> None:
         if not torch.equal(initial_param, current_param):
             param_changed = True
             break
-    
+
     print(f"\nModel parameters updated: {param_changed}")
 
 
 if __name__ == "__main__":
     main()
-

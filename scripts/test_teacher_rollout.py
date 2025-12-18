@@ -1,4 +1,5 @@
 """Test script for teacher rollout."""
+
 from __future__ import annotations
 
 import torch
@@ -6,9 +7,7 @@ from transformers import GenerationConfig
 import tyro
 from dataclasses import dataclass
 
-from environment.reward import (
-    reward_curriculum_format_only
-)
+from environment.reward import reward_curriculum_format_only
 from teacher_torch.experience import ExperienceBuffer
 from teacher_torch.train_grpo import GRPOTrainer, GRPOConfig
 from teacher_torch.sampling import SamplingOutput
@@ -20,9 +19,11 @@ from pathlib import Path
 # Configure torch for bfloat16 training with dynamo optimizations
 configure_torch_for_training()
 
+
 @dataclass
 class TeacherRolloutArgs:
     """Arguments for testing teacher rollout."""
+
     model_name_or_path: str = "Qwen/Qwen3-4B-Thinking-2507"
     teacher_group_size: int = 4
     max_new_tokens: int = 8192
@@ -33,12 +34,13 @@ class TeacherRolloutArgs:
     seed: int = 42
     repetition_penalty: float = 1
 
+
 def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
     """Test teacher rollout."""
     print("=" * 60)
     print("Testing Teacher Rollout")
     print("=" * 60)
-    
+
     # Create config
     config = GRPOConfig(
         model_name_or_path=args.model_name_or_path,
@@ -47,9 +49,9 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         temperature=args.temperature,
         top_k=args.top_k,
         top_p=args.top_p,
-        #repetition_penalty=args.repetition_penalty,
+        # repetition_penalty=args.repetition_penalty,
     )
-    
+
     # Create teacher generation config with sampling parameters
     teacher_generation_config = GenerationConfig(
         max_new_tokens=args.max_new_tokens,
@@ -63,14 +65,16 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
         repetition_penalty=args.repetition_penalty,
         stop_strings=["</answer>", "Human: ", "</answer>\n"],
     )
-    
+
     # Create trainer
-    trainer = GRPOTrainer(config, teacher_generation_config=teacher_generation_config, seed=args.seed)
-    
+    trainer = GRPOTrainer(
+        config, teacher_generation_config=teacher_generation_config, seed=args.seed
+    )
+
     # Test teacher rollout
     print(f"Teacher group size: {args.teacher_group_size}")
     print("Running teacher rollout...")
-    
+
     teacher_exp, teacher_metrics = trainer.rollout_teacher(
         teacher_reward_fn=reward_curriculum_format_only,
     )
@@ -87,6 +91,7 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
                 f.write(completion)
             with open(_dir_ / f"reward_{j}.txt", "w") as f:
                 f.write(str(exp.rewards[j]))
+
 
 if __name__ == "__main__":
     main()

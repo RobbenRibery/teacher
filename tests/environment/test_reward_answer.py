@@ -81,7 +81,9 @@ def test_reward_answer_success():
 
 def test_reward_answer_format_failure():
     curriculum_code = _extract_curriculum_from_valid()
-    answer_generation = _read_fixture(INVALID_PATH)  # missing proper answer block for our regex
+    answer_generation = _read_fixture(
+        INVALID_PATH
+    )  # missing proper answer block for our regex
 
     result = reward_answer(
         extracted_curriculum=curriculum_code,

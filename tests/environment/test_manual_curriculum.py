@@ -11,8 +11,7 @@ if project_root_str not in sys.path:
 
 # Import using importlib to ensure it works
 spec = importlib.util.spec_from_file_location(
-    "environment.execution",
-    project_root / "environment" / "execution.py"
+    "environment.execution", project_root / "environment" / "execution.py"
 )
 execution_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(execution_module)
@@ -32,7 +31,7 @@ constraints = [
 
 def test_curriculum_returns_error_due_to_isdigit_on_int():
     """Test that the curriculum returns an error because .isdigit() is called on an int.
-    
+
     The third constraint calls sum(...).isdigit(), but sum() returns an int,
     and int doesn't have an isdigit() method - that's a string method.
     """
@@ -45,7 +44,7 @@ def test_curriculum_returns_error_due_to_isdigit_on_int():
 
 def test_curriculum_error_for_value_that_passes_first_two_constraints():
     """Test that even values passing first two constraints fail on the buggy third one.
-    
+
     x=6 passes:
     - 6 % 7 == 6 ✓
     - bin(6) = '110' has 2 ones ✓
@@ -59,7 +58,7 @@ def test_curriculum_error_for_value_that_passes_first_two_constraints():
 
 def test_curriculum_error_for_another_valid_candidate():
     """Test with x=48 which would pass first two constraints but fails on buggy third.
-    
+
     x=48:
     - 48 % 7 == 6 ✓
     - bin(48) = '110000' has 2 ones ✓
@@ -73,7 +72,7 @@ def test_curriculum_error_for_another_valid_candidate():
 
 def test_curriculum_fails_early_on_first_constraint():
     """Test with x=5 which fails the first constraint (no error, just incorrect).
-    
+
     x=5: 5 % 7 == 5 ✗ (needs to be 6)
     Fails before reaching the buggy third constraint.
     """
@@ -88,7 +87,7 @@ def test_curriculum_fails_early_on_first_constraint():
 
 def test_curriculum_fails_early_on_second_constraint():
     """Test with x=13 which passes first but fails second constraint.
-    
+
     x=13:
     - 13 % 7 == 6 ✓
     - bin(13) = '1101' has 3 ones ✗ (needs exactly 2)
@@ -107,17 +106,19 @@ def test_curriculum_no_solutions_due_to_bug():
     """Test that no values pass because the third constraint always raises an error."""
     passing_values = []
     error_values = []
-    
+
     for x in range(0, 100):
         result = verify(CURRICULUM_CODE, x)
         if result.correct:
             passing_values.append(x)
         elif result.error is not None and "AttributeError" in result.error:
             error_values.append(x)
-    
+
     # No values should pass due to the buggy constraint
-    assert len(passing_values) == 0, f"Expected no passing values due to bug, but found: {passing_values}"
-    
+    assert len(passing_values) == 0, (
+        f"Expected no passing values due to bug, but found: {passing_values}"
+    )
+
     # Values that pass first two constraints should hit the AttributeError
     # These are values where x % 7 == 6 AND bin(x).count('1') == 2
     assert len(error_values) > 0, "Expected some values to hit the AttributeError"

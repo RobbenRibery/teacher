@@ -1,9 +1,10 @@
 """
 Rollout module for GRPO training.
 
-Orchestrates the generation phase: sample responses, compute rewards, 
+Orchestrates the generation phase: sample responses, compute rewards,
 and package everything into Experience for training.
 """
+
 from __future__ import annotations
 
 from typing import Callable, Any, Optional, Type
@@ -24,22 +25,24 @@ logger = setup_logger_with_file_line(__name__)
 @dataclass
 class RolloutConfig:
     """Configuration for rollout behavior.
-    
+
     Attributes:
         group_size: Number of samples per prompt for group-relative advantages.
         seed: Random seed for reproducibility.
         normalize_advantages: Whether to normalize advantages (mean=0, std=1).
         use_rloo_baseline: Use RLOO baseline (leave-one-out) for variance reduction.
     """
+
     group_size: int = 4
     seed: int = 42
     normalize_advantages: bool = True
     use_rloo_baseline: bool = False
 
-@dataclass 
+
+@dataclass
 class RolloutMetric:
     """Metrics collected during a rollout.
-    
+
     Attributes:
         num_samples: Total number of samples generated.
         group_size: Number of samples per prompt group.
@@ -49,6 +52,7 @@ class RolloutMetric:
         mean_completion_len: Mean length of generated completions.
         extra_metrics: Additional metrics from reward_fn (None if no reward_fn provided).
     """
+
     num_samples: int
     group_size: int
     mean_entropy: float
@@ -58,7 +62,7 @@ class RolloutMetric:
     mean_solved_rate: Optional[float] = None
     mean_learnability: Optional[float] = None
     mean_advantages: Optional[float] = None
-    #extra_metrics: Optional[dict[str, Any]] = None 
+    # extra_metrics: Optional[dict[str, Any]] = None
 
 
 # Type alias for reward functions
@@ -80,14 +84,14 @@ def rollout(
 ) -> tuple[ExperienceBuffer, RolloutMetric]:
     """
     Perform a single rollout: sample responses and compute experiences.
-    
+
     This is the main entry point for the generation phase of GRPO. It:
     1. Samples multiple responses per prompt (group_size)
     2. Computes log probabilities for importance sampling
     3. Calls reward_fn to score each response
     4. Computes group-relative advantages
     5. Packages everything into Experience for training
-    
+
     Args:
         model: The policy model to sample from.
         tokenizer: Tokenizer for the model.
@@ -103,18 +107,18 @@ def rollout(
         reward_fn: Callable that takes SamplingOutput and returns dict with:
             - "rewards": Tensor of shape (num_samples,) with scalar rewards
             - Any additional keys for logging (e.g., "accuracy", "format_ok")
-    
+
     Returns:
         Tuple of:
             - ExperienceBuffer: Container with all data needed for GRPO training.
             - RolloutMetric: Metrics from reward_fn plus rollout stats.
-    
+
     Example:
         >>> def my_reward_fn(sampling_output: SamplingOutput) -> dict[str, Any]:
         ...     # Your reward logic here
         ...     rewards = torch.tensor([score(c) for c in sampling_output.completions])
         ...     return {"rewards": rewards, "accuracy": rewards.mean()}
-        >>> 
+        >>>
         >>> exp, metrics = rollout(
         ...     model, tokenizer, prompts=["Solve: 2+2="],
         ...     reward_fn=my_reward_fn,
@@ -128,8 +132,8 @@ def rollout(
         f"generation_config.num_return_sequences ({generation_config.num_return_sequences}) "
         f"must equal config.group_size ({config.group_size})"
     )
-    batch_size = len(prompts) #-> number of unique questions/inputs
-    num_samples = batch_size * config.group_size #-> total number of samples
+    batch_size = len(prompts)  # -> number of unique questions/inputs
+    num_samples = batch_size * config.group_size  # -> total number of samples
 
     logger.info(f"# Unique Input Prompts: {batch_size}")
     logger.info(f"# Total Samples: {num_samples}")
@@ -144,9 +148,11 @@ def rollout(
         generation_config=generation_config,
         seed=config.seed,
     )
-    logger.info(f"\033[34mFirst sampling output:\n======\n{sampling_output.completions[0]}\033[0m")
+    logger.info(
+        f"\033[34mFirst sampling output:\n======\n{sampling_output.completions[0]}\033[0m"
+    )
     logger.info(f"Sampling Statistics:\n======\n{str(sampling_output)}")
-    
+
     # === Step 2: Compute old log probs (behavior policy) ===
     # These are needed for importance sampling in PPO/GRPO
     action_log_probs, entropy = sequences_log_probs(
@@ -156,19 +162,21 @@ def rollout(
         return_entropy=True,
         logits_minibatch_size=logits_minibatch_size,
     )
-    
+
     rewards, advantages, learnability = None, None, None
-    reward_outputs: list[Type[Reward]] = [reward_fn(completion) for completion in sampling_output.completions]
+    reward_outputs: list[Type[Reward]] = [
+        reward_fn(completion) for completion in sampling_output.completions
+    ]
     for i, reward_output in enumerate(reward_outputs):
         logger.info(f"\033[35mReward output {i}: \n======\n{reward_output}\033[0m")
 
-    rewards:list[float] = [
-        reward.reward for reward in reward_outputs
-    ]
+    rewards: list[float] = [reward.reward for reward in reward_outputs]
     if any(reward is None for reward in reward_outputs):
         raise ValueError("reward_fn must return a Reward object for each completion")
-        
-    rewards:torch.FloatTensor = torch.tensor(rewards, dtype=torch.bfloat16, device=model.device)
+
+    rewards: torch.FloatTensor = torch.tensor(
+        rewards, dtype=torch.bfloat16, device=model.device
+    )
     assert rewards.shape == (num_samples,), (
         f"reward_fn must return rewards of shape ({num_samples},), got {rewards.shape}"
     )
@@ -185,11 +193,15 @@ def rollout(
         )
         # Compute solved rate
         solved_mask = (rewards >= solved_threshold).bool()  # (num_samples,)
-        solved_grouped = solved_mask.view(batch_size, config.group_size) # (batch_size, group_size)
+        solved_grouped = solved_mask.view(
+            batch_size, config.group_size
+        )  # (batch_size, group_size)
         solved_mean_per_group = solved_grouped.mean(dim=1)  # (batch_size,)
-        
+
         # Compute learnability
-        learnability:torch.FloatTensor = solved_mean_per_group * (1.0 - solved_mean_per_group) # (batch_size,)
+        learnability: torch.FloatTensor = solved_mean_per_group * (
+            1.0 - solved_mean_per_group
+        )  # (batch_size,)
 
         # Compute mean solved rate
         mean_solved_rate = solved_mask.float().mean().item()
@@ -201,14 +213,17 @@ def rollout(
         num_samples=num_samples,
         group_size=config.group_size,
         mean_entropy=entropy.mean().item() if entropy is not None else 0.0,
-        mean_completion_len=sampling_output.action_mask.sum(dim=1).float().mean().item(),
+        mean_completion_len=sampling_output.action_mask.sum(dim=1)
+        .float()
+        .mean()
+        .item(),
         mean_reward=rewards.mean().item(),
         std_reward=rewards.std().item(),
         mean_solved_rate=mean_solved_rate,
         mean_learnability=mean_learnability,
         mean_advantages=mean_advantages,
     )
-    
+
     experience = ExperienceBuffer.from_sampling_output(
         role=role,
         sampling_output=sampling_output,
@@ -219,5 +234,5 @@ def rollout(
         learnability=learnability,
         only_check_format=only_check_format,
     )
-    
+
     return experience, metrics

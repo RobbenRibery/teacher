@@ -3,24 +3,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 import torch
 from transformers import (
-    PreTrainedModel, 
-    PreTrainedTokenizer, 
+    PreTrainedModel,
+    PreTrainedTokenizer,
     GenerationConfig,
     set_seed,
 )
-from teacher_torch.utils import setup_logger_with_file_line    
+from teacher_torch.utils import setup_logger_with_file_line
 
 logger = setup_logger_with_file_line(__name__)
+
 
 @dataclass
 class SamplingOutput:
     """Container for language model generation outputs.
-    
+
     Stores all data produced by sampling responses from a Hugging Face language model,
     including tokenized inputs, generated sequences, masks, and decoded text. This output
     is typically used for reinforcement learning training pipelines (e.g., GRPO) where
     you need to distinguish between prompt tokens and generated tokens.
-    
+
     Attributes:
         num_samples: Number of samples generated (batch size).
             Shape: scalar
@@ -41,9 +42,12 @@ class SamplingOutput:
         prompts: List of original prompt strings used for generation.
             Length: batch_size
     """
+
     num_samples: int
     input_ids: torch.IntTensor
-    sequence_attention_mask: torch.IntTensor # this is the attention mask for the sequence ids
+    sequence_attention_mask: (
+        torch.IntTensor
+    )  # this is the attention mask for the sequence ids
     sequence_ids: torch.IntTensor
     action_mask: torch.BoolTensor
     completions: list[str]
@@ -64,21 +68,22 @@ class SamplingOutput:
             f")"
         )
 
+
 @torch.inference_mode()
 def sample_responses_hf(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    prompts:list[str],
+    prompts: list[str],
     generation_config: GenerationConfig,
     seed: int = 42,
 ) -> SamplingOutput:
     """
     Sample responses from a Hugging Face language model for given prompts.
-    
+
     This function generates text completions for a batch of prompts using the specified
     model and generation configuration. It sets a random seed for reproducibility and
     creates an action mask to identify generated tokens (excluding padding).
-    
+
     Args:
         model: The pre-trained Hugging Face model to use for generation.
         tokenizer: The tokenizer associated with the model.
@@ -86,7 +91,7 @@ def sample_responses_hf(
         generation_config: Generation configuration specifying parameters like
             max_length, temperature, top_p, etc.
         seed: Random seed for reproducibility. Defaults to 42.
-    
+
     Returns:
         SamplingOutput: A dataclass containing:
             - num_samples: Number of samples generated (batch size).
@@ -96,36 +101,40 @@ def sample_responses_hf(
               (True for generated tokens, False for input/padding tokens).
             - completions: List of decoded completion strings.
     """
-    assert tokenizer.padding_side == "left", f"Tokenizer padding_side must be 'left', got '{tokenizer.padding_side}'"
+    assert tokenizer.padding_side == "left", (
+        f"Tokenizer padding_side must be 'left', got '{tokenizer.padding_side}'"
+    )
     model.eval()
 
     # set the seed for reproducibilitys
     set_seed(seed)
 
-    batch_inputs:dict[str, torch.IntTensor] = tokenizer(
+    batch_inputs: dict[str, torch.IntTensor] = tokenizer(
         prompts,
         return_tensors="pt",
-        padding='longest',
+        padding="longest",
         truncation=True,
         return_attention_mask=True,
-        padding_side = "left",
+        padding_side="left",
     )
     pad_token_id = tokenizer.pad_token_id
 
     logger.info(f"Generation config:\n======\n{generation_config.to_dict()}\n======\n")
-    sequence_ids:torch.IntTensor = model.generate(
+    sequence_ids: torch.IntTensor = model.generate(
         input_ids=batch_inputs["input_ids"].to(model.device),
         attention_mask=batch_inputs["attention_mask"].to(model.device),
         tokenizer=tokenizer,
-        **generation_config.to_dict()
+        **generation_config.to_dict(),
     )
 
-    action_mask:torch.BoolTensor = torch.zeros_like(sequence_ids, dtype=torch.bool, device=sequence_ids.device)
+    action_mask: torch.BoolTensor = torch.zeros_like(
+        sequence_ids, dtype=torch.bool, device=sequence_ids.device
+    )
     action_mask[:, batch_inputs["input_ids"].shape[1] :] = True
     action_mask[sequence_ids == pad_token_id] = False
-    action_mask:torch.BoolTensor = action_mask[:, 1:]
+    action_mask: torch.BoolTensor = action_mask[:, 1:]
 
-    sequence_attention_mask:torch.IntTensor = (sequence_ids != pad_token_id).long()
+    sequence_attention_mask: torch.IntTensor = (sequence_ids != pad_token_id).long()
 
     return SamplingOutput(
         num_samples=sequence_ids.shape[0],
@@ -134,8 +143,8 @@ def sample_responses_hf(
         sequence_ids=sequence_ids,
         action_mask=action_mask,
         completions=tokenizer.batch_decode(
-            sequence_ids[:, batch_inputs["input_ids"].shape[1] :], 
-            skip_special_tokens=True
+            sequence_ids[:, batch_inputs["input_ids"].shape[1] :],
+            skip_special_tokens=True,
         ),
         prompts=prompts,
         group_size=generation_config.num_return_sequences,

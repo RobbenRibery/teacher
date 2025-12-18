@@ -11,10 +11,11 @@ from teacher_torch.loss import sequences_log_probs, grpo_loss
 from torch.optim import Optimizer
 from torch.nn import Module
 
+
 @dataclass
 class GRPOConfig:
     """Configuration for GRPO training.
-    
+
     Attributes:
         model_name_or_path: HuggingFace model identifier or local path.
         teacher_group_size: Number of curriculum samples per seed task (G_teacher).
@@ -29,9 +30,10 @@ class GRPOConfig:
         kl_beta: KL penalty coefficient (higher = more conservative updates).
         log_interval: Steps between logging outputs.
     """
+
     # Model configuration
     model_name_or_path: str = "Qwen/Qwen3-0.6B"
-    
+
     # Generation configuration
     teacher_group_size: int = 8
     student_group_size: int = 16
@@ -39,12 +41,12 @@ class GRPOConfig:
     temperature: float = 0.7
     top_k: int = 50
     top_p: float = 0.9
-    
+
     # Training configuration
     learning_rate: float = 1e-5
     max_grad_norm: float = 1.0
     epochs_per_step: int = 1
-    
+
     # GRPO hyperparameters
     clip_eps: float = 0.2
     kl_beta: float = 0.04
@@ -54,31 +56,33 @@ class GRPOConfig:
     # Training loop configuration
     mini_batch_size: int = 4
     logits_minibatch_size: int = 128
-    
+
     # Logging configuration
     log_interval: int = 1
+
 
 @dataclass
 class TrainingMetrics:
     """Metrics collected during a training update step.
-    
+
     Attributes:
         loss: Average loss across all batches.
         mean_kl: Average KL divergence from reference policy.
         policy_loss: Average policy loss component.
         grad_norm: Average gradient norm after clipping.
     """
+
     loss: float
     mean_kl: float
     policy_loss: float
     grad_norm: float
-    
+
     def to_dict(self, prefix: str = "train/") -> dict[str, float]:
         """Convert metrics to dictionary format.
-        
+
         Args:
             prefix: Prefix to add to each key (e.g., "train/", "student/train/").
-            
+
         Returns:
             Dictionary with prefixed keys.
         """
@@ -89,7 +93,10 @@ class TrainingMetrics:
             f"{prefix}grad_norm": self.grad_norm,
         }
 
-def zero_pad_sequences(sequences: list[torch.Tensor], side: str = "left", value: int = 0) -> torch.Tensor:
+
+def zero_pad_sequences(
+    sequences: list[torch.Tensor], side: str = "left", value: int = 0
+) -> torch.Tensor:
     """Zero pad sequences to the same length."""
     assert side in ("left", "right")
     max_len = max(seq.size(0) for seq in sequences)
@@ -100,33 +107,43 @@ def zero_pad_sequences(sequences: list[torch.Tensor], side: str = "left", value:
         padded_sequences.append(pad(seq, padding, value=value))
     return torch.stack(padded_sequences, dim=0)
 
+
 def collate_experience(batch: list[Experience]) -> Experience:
     """Collate a batch of Experience objects into a single Experience object."""
     # keys to process
     keys = [
-        "sequences", "attention_mask", "action_mask", "action_log_probs",
-        "returns", "solved_mask", "advantages", "learnability",
-        "prompt", "completion", "role", "pad_token_id"
+        "sequences",
+        "attention_mask",
+        "action_mask",
+        "action_log_probs",
+        "returns",
+        "solved_mask",
+        "advantages",
+        "learnability",
+        "prompt",
+        "completion",
+        "role",
+        "pad_token_id",
     ]
-    
+
     batch_data = {}
-    
+
     # We need pad_token_id from the first item
     pad_token_id = batch[0].pad_token_id
-    
+
     for key in keys:
         vals = [getattr(item, key) for item in batch]
-        
+
         # Handle None (if any is None, the result is None)
         if any(v is None for v in vals):
             batch_data[key] = None
             continue
-            
+
         if isinstance(vals[0], torch.Tensor):
             # Tensors need special handling based on dimensions
             # All input tensors are (G, ...). We want to output (B*G, ...)
             # Flatten the batch of groups into a single list of items
-            
+
             flat_vals = []
             for v in vals:
                 # v is (G, ...)
@@ -136,21 +153,30 @@ def collate_experience(batch: list[Experience]) -> Experience:
                 # v[i] is (L) or (L-1) etc.
                 for i in range(v.size(0)):
                     flat_vals.append(v[i])
-            
-            if key in ["sequences", "attention_mask", "action_mask", "action_log_probs", "log_probs_ref", "kl"]:
+
+            if key in [
+                "sequences",
+                "attention_mask",
+                "action_mask",
+                "action_log_probs",
+                "log_probs_ref",
+                "kl",
+            ]:
                 # These have variable sequence lengths. Pad them.
                 padding_value = 0
                 if key == "sequences":
                     padding_value = pad_token_id
-                
-                batch_data[key] = zero_pad_sequences(flat_vals, side="left", value=padding_value)
+
+                batch_data[key] = zero_pad_sequences(
+                    flat_vals, side="left", value=padding_value
+                )
             else:
                 # returns, solved_mask, advantages, learnability are (G,) or (G, 1)
                 # Just stack/cat. flattening flat_vals gives list of scalars/1-element tensors
                 # torch.stack(flat_vals) works if they are tensors.
                 # If v[i] is scalar tensor, stack makes (BG,).
                 batch_data[key] = torch.stack(flat_vals, dim=0)
-                 
+
         elif isinstance(vals[0], list):
             # Lists (prompt, completion): extend
             new_list = []
@@ -161,8 +187,9 @@ def collate_experience(batch: list[Experience]) -> Experience:
             # Scalar or string (role, pad_token_id)
             # Take the first one
             batch_data[key] = vals[0]
-            
+
     return Experience(**batch_data)
+
 
 def update(
     model: Module,
@@ -173,7 +200,7 @@ def update(
     device: torch.device,
 ) -> TrainingMetrics:
     """Update the policy model using the collected experience.
-    
+
     Args:
         model: The policy model to update.
         ref_model: Reference model for KL regularization.
@@ -181,12 +208,12 @@ def update(
         experience: Experience buffer containing rollout data.
         config: Training configuration.
         device: Device to run computation on.
-        
+
     Returns:
         TrainingMetrics if any steps were performed, None otherwise.
     """
     model.train()
-    
+
     # DataLoader
     dataloader = DataLoader(
         experience,
@@ -194,19 +221,19 @@ def update(
         shuffle=True,
         collate_fn=collate_experience,
     )
-    
+
     # Metrics
     total_loss = 0.0
     total_kl = 0.0
     total_policy_loss = 0.0
     total_grad_norm = 0.0
     steps = 0
-    
+
     for _ in range(config.epochs_per_step):
         for batch in dataloader:
             batch: Experience = batch.to(device)
             optimizer.zero_grad()
-            
+
             # Forward pass - current policy
             # batch.sequences: (B*G, L)
             log_probs, _ = sequences_log_probs(
@@ -216,7 +243,7 @@ def update(
                 return_entropy=False,
                 logits_minibatch_size=config.logits_minibatch_size,
             )
-            
+
             # Reference policy (compute if needed)
             log_probs_ref = batch.log_probs_ref
             if log_probs_ref is None and config.kl_beta > 0:
@@ -228,7 +255,7 @@ def update(
                         return_entropy=False,
                         logits_minibatch_size=config.logits_minibatch_size,
                     )
-            
+
             # GRPO Loss
             loss, mean_kl, policy_loss = grpo_loss(
                 log_probs=log_probs,
@@ -239,26 +266,25 @@ def update(
                 clip_eps=config.clip_eps,
                 kl_beta=config.kl_beta,
             )
-            
+
             if not loss.isfinite():
                 print(f"Loss not finite, skipping: {loss}")
                 continue
-            
+
             loss.backward()
-            
+
             grad_norm = clip_grad_norm_(
-                model.parameters(), 
-                max_norm=config.max_grad_norm
+                model.parameters(), max_norm=config.max_grad_norm
             )
-            
+
             optimizer.step()
-            
+
             total_loss += loss.item()
             total_kl += mean_kl.item()
             total_policy_loss += policy_loss.item()
             total_grad_norm += grad_norm.item()
             steps += 1
-            
+
             del log_probs, log_probs_ref, loss
 
     return TrainingMetrics(

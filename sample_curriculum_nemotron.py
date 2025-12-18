@@ -31,8 +31,12 @@ def sample_curriculum_nemotron(
         seed_task=task_instance.render(),
         num_instances=num_instances_to_sample,
     )
+
     def _flatten_messages(messages: list[dict[str, str]]) -> str:
-        return "\n\n".join([f"{message['role']}\n{message['content']}" for message in messages])
+        return "\n\n".join(
+            [f"{message['role']}\n{message['content']}" for message in messages]
+        )
+
     text = _flatten_messages(messages)
 
     print(f"Input Prompt Length (chars): {len(text)}")
@@ -48,12 +52,12 @@ def sample_curriculum_nemotron(
     generation_state = model.init_cuda_graph_generation(
         max_new_tokens=max_new_tokens,
         batch_size=1,
-        device='cuda',
+        device="cuda",
     )
 
     print("Generating with CUDA graph acceleration...")
     start_time = time.time()
-    
+
     # Use the CUDA graph optimized generation
     outputs: torch.Tensor = model.generate_with_cuda_graph(
         input_ids=model_inputs.input_ids,
@@ -62,7 +66,7 @@ def sample_curriculum_nemotron(
         temperature=temperature,
         eos_token_id=tokenizer.eos_token_id,
     )
-    
+
     elapsed_time = time.time() - start_time
 
     input_length = model_inputs.input_ids.shape[1]
@@ -113,4 +117,3 @@ if __name__ == "__main__":
     print("Sampled Output:")
     rich.print(output)
     print("-" * 50)
-

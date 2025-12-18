@@ -81,4 +81,3 @@ def test_reward_curriculum_invalid_format():
     assert result.extracted_curriculum is None or result.extracted_curriculum == ""
     assert result.error is not None
     assert result.reward == 0.0
-

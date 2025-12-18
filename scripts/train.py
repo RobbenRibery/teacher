@@ -1,4 +1,5 @@
 """Training script that calls train_grpo.py main function."""
+
 from __future__ import annotations
 
 import sys
@@ -11,4 +12,3 @@ from teacher_torch.train_grpo import main
 
 if __name__ == "__main__":
     main()
-

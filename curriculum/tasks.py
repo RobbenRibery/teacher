@@ -3,21 +3,17 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from textwrap import dedent
 
+
 class Task(BaseModel):
     """
     A task
     """
-    name: str = Field(
-        ...,
-        description="The name of the task."
-    )
-    description: str = Field(
-        ...,
-        description="The description of the task."
-    )
+
+    name: str = Field(..., description="The name of the task.")
+    description: str = Field(..., description="The description of the task.")
     format: str = Field(
         ...,
-        description="The format of the task, must contain a 'seed_task' to be filled."
+        description="The format of the task, must contain a 'seed_task' to be filled.",
     )
 
     def render(self) -> str:
@@ -28,14 +24,15 @@ class BooleanConstraintsSatisfaction(Task):
     """
     A boolean constraint satisfaction task.
     """
+
     name: str = dedent(
-    """
+        """
     Boolean Constraints Satisfaction
     """
     ).strip()
-    
+
     description: str = dedent(
-    """
+        """
     ## Objective:
     Each problem from the curriculum is defined by a set of executable boolean constraints about a single variable "x".
     To solve a problem from the curriculum, a student must write Python code to derive/search/find/compute a particular value of "x" that meets all constraints imposed.
@@ -47,7 +44,7 @@ class BooleanConstraintsSatisfaction(Task):
     ).strip()
 
     format: str = dedent(
-    """
+        """
     Put your final designed problem inside the <answer> tag and don't include solution or hints inside the final answer.
     Use the following format for think and answer. 
     <think>
@@ -66,6 +63,5 @@ class BooleanConstraintsSatisfaction(Task):
     """
     ).strip()
 
-TASKS = {
-    "boolean_constraints_satisfaction": BooleanConstraintsSatisfaction
-}
+
+TASKS = {"boolean_constraints_satisfaction": BooleanConstraintsSatisfaction}
