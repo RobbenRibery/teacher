@@ -7,7 +7,7 @@ from transformers import GenerationConfig
 import tyro
 from dataclasses import dataclass
 
-from teacher_torch.train_grpo import GRPOTrainer, GRPOConfig
+from teacher_torch.train_teacher_student import GRPOTrainer, GRPOConfig
 from teacher_torch.sampling import SamplingOutput
 
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from environment.reward import reward_curriculum_format_only
 from teacher_torch.experience import TeacherExperience
-from teacher_torch.train_grpo import GRPOTrainer, GRPOConfig
+from teacher_torch.train_teacher_student import GRPOTrainer, GRPOConfig
 from teacher_torch.sampling import SamplingOutput
 from teacher_torch.rollout import RolloutMetric
 from teacher_torch.utils import configure_torch_for_training
