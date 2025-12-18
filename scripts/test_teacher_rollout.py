@@ -8,7 +8,7 @@ import tyro
 from dataclasses import dataclass
 
 from environment.reward import reward_curriculum_format_only
-from teacher_torch.experience import ExperienceBuffer
+from teacher_torch.experience import TeacherExperience
 from teacher_torch.train_grpo import GRPOTrainer, GRPOConfig
 from teacher_torch.sampling import SamplingOutput
 from teacher_torch.rollout import RolloutMetric
@@ -78,19 +78,20 @@ def main(args: TeacherRolloutArgs = tyro.cli(TeacherRolloutArgs)) -> None:
     teacher_exp, teacher_metrics = trainer.rollout_teacher(
         teacher_reward_fn=reward_curriculum_format_only,
     )
-    print(f"Number of unique prompts: {len(teacher_exp.prompts)}")
+    print(f"Prompt: {teacher_exp.prompt}")
     print(f"Number of completions: {len(teacher_exp.completions)}")
 
-    for i, exp in enumerate(teacher_exp):
-        _dir_ = Path(f"data/teacher_{i}")
-        _dir_.mkdir(parents=True, exist_ok=True)
-        with open(_dir_ / "prompt.txt", "w") as f:
-            f.write(exp.prompt)
-        for j, completion in enumerate(exp.completions):
-            with open(_dir_ / f"completion_{j}.txt", "w") as f:
-                f.write(completion)
+    # Save teacher experience
+    _dir_ = Path(f"data/teacher_0")
+    _dir_.mkdir(parents=True, exist_ok=True)
+    with open(_dir_ / "prompt.txt", "w") as f:
+        f.write(teacher_exp.prompt)
+    for j, completion in enumerate(teacher_exp.completions):
+        with open(_dir_ / f"completion_{j}.txt", "w") as f:
+            f.write(completion)
+        if teacher_exp.rewards is not None:
             with open(_dir_ / f"reward_{j}.txt", "w") as f:
-                f.write(str(exp.rewards[j]))
+                f.write(str(teacher_exp.rewards[j].item()))
 
 
 if __name__ == "__main__":

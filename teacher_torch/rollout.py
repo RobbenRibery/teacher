@@ -7,7 +7,7 @@ and package everything into Experience for training.
 
 from __future__ import annotations
 
-from typing import Callable, Any, Optional, Type
+from typing import Callable, Any, Optional, Type, Union
 from dataclasses import dataclass
 
 import torch
@@ -15,7 +15,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
 from environment.reward import Reward
 
 from teacher_torch.sampling import SamplingOutput, sample_responses_hf
-from teacher_torch.experience import ExperienceBuffer
+from teacher_torch.experience import TeacherExperience, StudentExperienceBuffer
 from teacher_torch.loss import compute_group_advantages, sequences_log_probs
 from teacher_torch.utils import setup_logger_with_file_line
 
@@ -81,7 +81,8 @@ def rollout(
     reward_fn: Optional[RewardFn] = None,
     logits_minibatch_size: int = 128,
     only_check_format: bool = False,
-) -> tuple[ExperienceBuffer, RolloutMetric]:
+    source_curriculums: Optional[list[str]] = None,
+) -> tuple[Union[TeacherExperience, StudentExperienceBuffer], RolloutMetric]:
     """
     Perform a single rollout: sample responses and compute experiences.
 
@@ -96,21 +97,23 @@ def rollout(
         model: The policy model to sample from.
         tokenizer: Tokenizer for the model.
         prompts: List of prompt strings.
-        reward_fn: Callable that takes SamplingOutput and returns dict with:
-            - "rewards": Tensor of shape (num_samples,) with scalar rewards
-            - Any additional keys for logging (e.g., "accuracy", "format_ok")
         generation_config: HuggingFace generation config.
             Note: num_return_sequences should equal config.group_size.
         config: RolloutConfig with hyperparameters.
         role: Either "teacher" or "student" for logging.
         solved_threshold: Threshold for considering a prompt group solved.
-        reward_fn: Callable that takes SamplingOutput and returns dict with:
-            - "rewards": Tensor of shape (num_samples,) with scalar rewards
-            - Any additional keys for logging (e.g., "accuracy", "format_ok")
+        reward_fn: Callable that takes completion string and returns Reward object.
+        logits_minibatch_size: Batch size for computing log probabilities.
+        only_check_format: Whether to only check format without computing advantages.
+        source_curriculums: For student role, list of curriculum strings that seeded
+            each prompt. Required when role=="student" to create StudentExperienceBuffer.
 
     Returns:
         Tuple of:
-            - ExperienceBuffer: Container with all data needed for GRPO training.
+            - TeacherExperience or StudentExperienceBuffer: Container with all data
+              needed for GRPO training. Returns StudentExperienceBuffer when
+              role=="student" and source_curriculums is provided, otherwise returns
+              TeacherExperience.
             - RolloutMetric: Metrics from reward_fn plus rollout stats.
 
     Example:
@@ -224,15 +227,31 @@ def rollout(
         mean_advantages=mean_advantages,
     )
 
-    experience = ExperienceBuffer.from_sampling_output(
-        role=role,
-        sampling_output=sampling_output,
-        pad_token_id=tokenizer.pad_token_id,
-        action_log_probs=action_log_probs,
-        rewards=rewards,
-        advantages=advantages,
-        learnability=learnability,
-        only_check_format=only_check_format,
-    )
+    # Create appropriate experience based on role
+    if role == "student" and source_curriculums is not None:
+        # Compute solved_mask for student experiences
+        solved_mask = (rewards >= solved_threshold).bool() if rewards is not None else None
+        
+        experience = StudentExperienceBuffer.from_sampling_output(
+            sampling_output=sampling_output,
+            pad_token_id=tokenizer.pad_token_id,
+            action_log_probs=action_log_probs,
+            source_curriculums=source_curriculums,
+            rewards=rewards,
+            advantages=advantages,
+            solved_mask=solved_mask,
+            learnability=learnability,
+        )
+    else:
+        # Teacher experience (single experience, not a buffer)
+        experience = TeacherExperience.from_sampling_output(
+            sampling_output=sampling_output,
+            pad_token_id=tokenizer.pad_token_id,
+            action_log_probs=action_log_probs,
+            rewards=rewards,
+            advantages=advantages,
+            learnability=learnability,
+            only_check_format=only_check_format,
+        )
 
     return experience, metrics

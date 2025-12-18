@@ -5,7 +5,8 @@ from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 from torch.nn.functional import pad
 
-from teacher_torch.experience import Experience, ExperienceBuffer
+from teacher_torch.experience import Experience, TeacherExperience, StudentExperienceBuffer
+from typing import Union
 from teacher_torch.loss import sequences_log_probs, grpo_loss
 
 from torch.optim import Optimizer
@@ -195,7 +196,7 @@ def update(
     model: Module,
     ref_model: Module,
     optimizer: Optimizer,
-    experience: ExperienceBuffer,
+    experience: Union[TeacherExperience, StudentExperienceBuffer],
     config: GRPOConfig,
     device: torch.device,
 ) -> TrainingMetrics:
@@ -205,7 +206,7 @@ def update(
         model: The policy model to update.
         ref_model: Reference model for KL regularization.
         optimizer: Optimizer for updating model parameters.
-        experience: Experience buffer containing rollout data.
+        experience: TeacherExperience (single) or StudentExperienceBuffer (multiple experiences).
         config: Training configuration.
         device: Device to run computation on.
 
@@ -214,9 +215,16 @@ def update(
     """
     model.train()
 
+    # Convert TeacherExperience to a list for DataLoader
+    if isinstance(experience, TeacherExperience):
+        experience_list = [experience]
+    else:
+        # StudentExperienceBuffer - already iterable
+        experience_list = experience
+
     # DataLoader
     dataloader = DataLoader(
-        experience,
+        experience_list,
         batch_size=config.mini_batch_size,
         shuffle=True,
         collate_fn=collate_experience,

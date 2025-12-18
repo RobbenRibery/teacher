@@ -23,7 +23,7 @@ from typing import Optional, Any, Callable
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
 
-from teacher_torch.experience import ExperienceBuffer, Experience
+from teacher_torch.experience import TeacherExperience, StudentExperienceBuffer
 from teacher_torch.rollout import rollout, RolloutMetric, RolloutConfig
 from teacher_torch.sampling import SamplingOutput
 from teacher_torch.utils import load_model_tokenizer, configure_torch_for_training
@@ -249,22 +249,27 @@ class GRPOTrainer:
         self,
         teacher_reward_fn: Optional[Callable[[str], CurriculumReward]] = None,
         min_legit_problems: int = 0,
-    ) -> tuple[ExperienceBuffer, RolloutMetric]:
+        max_trial_attempts: int = 10,
+    ) -> tuple[TeacherExperience, RolloutMetric]:
         """Execute teacher rollout phase.
 
-        Generates multiple curricula for each seed task using the provided
-        reward function.
+        Generates multiple curricula for a single seed task using the provided
+        reward function. If min_legit_problems > 0, keeps rolling out until
+        we accumulate that many correctly formatted curricula (or hit max attempts).
 
         Args:
-            teacher_reward_fn: Callable that takes SamplingOutput and returns
-                a dict with "rewards" key containing a tensor of shape (num_samples,).
+            teacher_reward_fn: Callable that takes completion string and returns Reward object.
+            min_legit_problems: Minimum number of correctly formatted curricula to collect.
+                If 0, returns the first rollout without filtering.
+            max_trial_attempts: Maximum number of rollout attempts when collecting
+                correctly formatted curricula.
 
         Returns:
             Tuple containing:
-                - experience: ExperienceBuffer with generated curricula.
-                - metrics: RolloutMetric containing generation statistics.
+                - experience: TeacherExperience with generated curricula.
+                - metrics: RolloutMetric containing generation statistics (from last attempt).
         """
-        # Build teacher prompts
+        # Build teacher prompts (single prompt)
         prompts = [self._build_teacher_prompt()]
 
         # Create rollout config
@@ -274,7 +279,7 @@ class GRPOTrainer:
             normalize_advantages=self.config.normalize_advantages,
         )
 
-        # Generate curricula using externalized reward function
+        # If we don't need to filter for correct formats, just do one rollout
         if min_legit_problems <= 0:
             return rollout(
                 model=self.model,
@@ -288,21 +293,49 @@ class GRPOTrainer:
                 logits_minibatch_size=self.config.logits_minibatch_size,
                 only_check_format=teacher_reward_fn is not None,
             )
-        else:
-            curated_buffer = ExperienceBuffer(experiences=[])
-            while len(curated_buffer) < min_legit_problems:
-                experience, metrics = self.rollout_teacher(
-                    teacher_reward_fn=teacher_reward_fn,
-                    min_legit_problems=0,  # no need to check for legit problems here
-                )
-                curated_buffer.extend(experience)
-            return curated_buffer, metrics
+        
+        # Otherwise, accumulate correctly formatted curricula
+        curated_experience: Optional[TeacherExperience] = None
+        attempts = 0
+        metrics = None
+        
+        while (curated_experience is None or len(curated_experience.curriculums or []) < min_legit_problems) and attempts < max_trial_attempts:
+            experience, metrics = rollout(
+                model=self.model,
+                tokenizer=self.tokenizer,
+                prompts=prompts,
+                generation_config=self.teacher_generation_config,
+                config=rollout_config,
+                role="teacher",
+                solved_threshold=self.config.solved_threshold,
+                reward_fn=teacher_reward_fn,
+                logits_minibatch_size=self.config.logits_minibatch_size,
+                only_check_format=True,  # Must check format when filtering
+            )
+            
+            # Get correctly formatted experience
+            correctly_formatted = experience.correct_formatted_experience
+            if correctly_formatted is not None:
+                if curated_experience is None:
+                    curated_experience = correctly_formatted
+                else:
+                    curated_experience = curated_experience.merge(correctly_formatted)
+            
+            attempts += 1
+        
+        # Return what we've accumulated (or empty experience if nothing worked)
+        if curated_experience is None:
+            # Return the last failed experience
+            return experience, metrics
+        
+        return curated_experience, metrics
 
     def rollout_student(
         self,
         problems: list[str],
+        source_curriculums: list[str],
         student_reward_fn: Optional[Callable[[str], CurriculumReward]] = None,
-    ) -> tuple[ExperienceBuffer, RolloutMetric]:
+    ) -> tuple[StudentExperienceBuffer, RolloutMetric]:
         """Execute student rollout phase.
 
         For each problem, generates multiple student answer attempts
@@ -310,11 +343,14 @@ class GRPOTrainer:
 
         Args:
             problems: List of problems for the student to solve.
+            source_curriculums: List of curriculum strings that seeded each problem.
+                Used to track which teacher-generated curriculum each student
+                experience originated from.
             student_reward_fn: Optional reward function for student answers.
 
         Returns:
             Tuple containing:
-                - experience: ExperienceBuffer with generated answers.
+                - experience: StudentExperienceBuffer with generated answers.
                 - metrics: RolloutMetric containing generation statistics.
         """
         # Format prompts for student (apply chat template)
@@ -327,7 +363,7 @@ class GRPOTrainer:
             normalize_advantages=self.config.normalize_advantages,
         )
 
-        # Generate answers
+        # Generate answers with source_curriculums for tracking
         return rollout(
             model=self.model,
             tokenizer=self.tokenizer,
@@ -339,25 +375,37 @@ class GRPOTrainer:
             reward_fn=student_reward_fn,
             logits_minibatch_size=self.config.logits_minibatch_size,
             only_check_format=student_reward_fn is not None,
+            source_curriculums=source_curriculums,
         )
 
     def train_step(
-        self, teacher_exp: ExperienceBuffer, student_exp: ExperienceBuffer
+        self, teacher_exp: TeacherExperience, student_exp: StudentExperienceBuffer
     ) -> dict[str, float]:
         """Perform a single training step with separate updates for student and teacher.
 
         Updates are performed in order:
-        1. Update model using student experience (with KL regularization)
-        2. Update model using teacher experience (with KL regularization)
+        1. Update teacher rewards based on student performance
+        2. Update model using student experience (with KL regularization)
+        3. Update model using teacher experience (with KL regularization)
+
+        The teacher reward is calculated as: solved_rate * (1 - solved_rate)
+        This encourages the teacher to generate problems at optimal difficulty.
 
         Args:
-            teacher_exp: Experience buffer from teacher rollout.
-            student_exp: Experience buffer from student rollout.
+            teacher_exp: Teacher experience from teacher rollout.
+            student_exp: Student experience buffer from student rollout.
 
         Returns:
             Combined metrics from both updates.
         """
-        # Step 1: Update using student experience
+        # Step 1: Update teacher rewards based on student performance
+        # Teacher reward = solved_rate * (1 - solved_rate) per curriculum
+        teacher_exp.update_teacher_rewards(
+            student_exp,
+            normalize_advantages=self.config.normalize_advantages,
+        )
+
+        # Step 2: Update using student experience
         student_metrics = update(
             model=self.model,
             ref_model=self.ref_model,
@@ -367,7 +415,7 @@ class GRPOTrainer:
             device=self.device,
         )
 
-        # Step 2: Update using teacher experience
+        # Step 3: Update using teacher experience (with updated rewards)
         teacher_metrics = update(
             model=self.model,
             ref_model=self.ref_model,
@@ -430,19 +478,25 @@ class GRPOTrainer:
             # Phase 1: Teacher generates curricula
             print("Teacher generating curricula...")
             teacher_exp, teacher_rollout_metrics = self.rollout_teacher(
-                seed_tasks=seed_tasks,
                 teacher_reward_fn=teacher_reward_fn,
             )
 
-            # Extract generated curricula (completions from teacher)
-            curriculum_generations = []
-            for exp in teacher_exp.experiences:
-                curriculum_generations.extend(exp.completion)
+            # Extract generated curricula from teacher experience
+            # curriculums contains the extracted python programs
+            if teacher_exp.curriculums is not None:
+                # Use extracted curriculums (python programs)
+                curriculum_generations = teacher_exp.curriculums
+                source_curriculums = teacher_exp.curriculums
+            else:
+                # Fallback to completions if no curriculums extracted
+                curriculum_generations = teacher_exp.completions
+                source_curriculums = teacher_exp.completions
 
             # Phase 2: Student solves curricula
             print("Student solving curricula...")
             student_exp, student_rollout_metrics = self.rollout_student(
-                prompts=curriculum_generations,
+                problems=curriculum_generations,
+                source_curriculums=source_curriculums,
                 student_reward_fn=student_reward_fn,
             )
 
