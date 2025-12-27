@@ -56,14 +56,7 @@ def _extract_curriculum_from_valid() -> str:
 
 
 def _make_answer_generation(code: str) -> str:
-    return f"""
-<think>t</think>
-<answer>
-```python
-{code}
-```
-</answer>
-"""
+    return f"<think>t</think><answer>\n```python\n{code}\n```</answer>"
 
 
 def test_reward_answer_group_mixed_results():

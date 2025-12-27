@@ -105,8 +105,6 @@ def sample_responses_hf(
         f"Tokenizer padding_side must be 'left', got '{tokenizer.padding_side}'"
     )
     model.eval()
-
-    # set the seed for reproducibilitys
     set_seed(seed)
 
     batch_inputs: dict[str, torch.IntTensor] = tokenizer(

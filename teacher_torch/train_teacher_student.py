@@ -30,6 +30,7 @@ from teacher_torch.utils import load_model_tokenizer, configure_torch_for_traini
 from teacher_torch.policy_gradient import update, GRPOConfig
 
 from environment.reward import CurriculumReward
+from environment.format import ANSWER_FORMAT_REGEX
 
 from curriculum.prompt_template import TeacherPrompt, StudentPrompt
 from curriculum.tasks import BooleanConstraintsSatisfaction
@@ -186,9 +187,7 @@ class GRPOTrainer:
         self.student_prompt_template = StudentPrompt()
 
         # Regex for extracting Python code from generations
-        self.format_regex = (
-            r"<think>.*?</think>.*?<answer>.*?```python\n(.*?)\n```.*?</answer>"
-        )
+        self.format_regex = ANSWER_FORMAT_REGEX
 
         # generation config
         self.teacher_generation_config = teacher_generation_config or GenerationConfig(

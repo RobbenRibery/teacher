@@ -17,7 +17,7 @@ class Task(BaseModel):
     )
 
     def render(self) -> str:
-        return f"#Name:{self.name}\n\n#Description:\n{self.description}\n\n#Format:\n{self.format}"
+        return f"## Name:\n{self.name}\n\n## Description:\n{self.description}\n\n## Format:\n{self.format}"
 
 
 class BooleanConstraintsSatisfaction(Task):
@@ -33,33 +33,37 @@ class BooleanConstraintsSatisfaction(Task):
 
     description: str = dedent(
         """
-    ## Objective:
-    Each problem from the curriculum is defined by a set of executable boolean constraints about a single variable "x".
-    To solve a problem from the curriculum, a student must write Python code to derive/search/find/compute a particular value of "x" that meets all constraints imposed.
-
-    # Properties of the curriculum
-    * Any problems from the curriculum must be solvable.
-    * The student must be able to exercise sophisticated logical reasoning, math, and programming skills to solve the problems you design.
+    ### Objective:
+    Any Boolean Constraints Satisfaction problem is defined by a set of executable boolean constraints about a variable "x", which can be any real number. 
+    Each constraint can be implemented as a Python lambda function that takes in "x" and output True/False.
+    To solve such a problem, a student must reason step by step to derive "x" that meets all constraints imposed. 
+    
+    ### Properties of the curriculum
+    * At least 1 solution to x must exist, though problems can have multiple solutions.
+    * The student must be able to exercise a set of general skills (i.e. math, programming or logic) while solving the problem.
+    * Only a single variable x is allowed.
     """
     ).strip()
 
     format: str = dedent(
         """
-    Put your final designed problem inside the <answer> tag and don't include solution or hints inside the final answer.
-    Use the following format for think and answer. 
-    <think>
-    ...
-    </think>
+    ### Guideline
+    - Put your final designed problem inside the <answer> tag and don't include solutions or hints.
+    - Your response MUST include exactly one <answer>...</answer> block.
+    - Any <think>...</think> content should appear BEFORE <answer>.
+    - Do not include any text after </answer>.
+
+    ### Example
     <answer>
     ```python
-    # Write Python code to derive a particular value of "x" that meets all constraints imposed:
+    # Reason step by step and derive a solution of x.
     constraints = [
         lambda x: ...,
         lambda x: ...,
-        ...
+        ...,
     ]
     ```
-    </answer> (terminate here and no further rounds)
+    </answer>
     """
     ).strip()
 

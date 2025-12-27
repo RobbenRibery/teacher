@@ -1,40 +1,13 @@
 import pathlib
 import sys
-import importlib.util
-
 import pytest
 
 project_root = pathlib.Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# Ensure environment package is loadable even in isolated test execution
-env_init_spec = importlib.util.spec_from_file_location(
-    "environment", project_root / "environment" / "__init__.py"
-)
-env_module = importlib.util.module_from_spec(env_init_spec)
-sys.modules.setdefault("environment", env_module)
-if env_init_spec.loader is not None:
-    env_init_spec.loader.exec_module(env_module)
-
-reward_spec = importlib.util.spec_from_file_location(
-    "environment.reward", project_root / "environment" / "reward.py"
-)
-reward_module = importlib.util.module_from_spec(reward_spec)
-sys.modules["environment.reward"] = reward_module
-
-execution_spec = importlib.util.spec_from_file_location(
-    "environment.execution", project_root / "environment" / "execution.py"
-)
-execution_module = importlib.util.module_from_spec(execution_spec)
-sys.modules["environment.execution"] = execution_module
-if execution_spec.loader is not None:
-    execution_spec.loader.exec_module(execution_module)
-
-if reward_spec.loader is not None:
-    reward_spec.loader.exec_module(reward_module)
-
-reward_curriculum = reward_module.reward_curriculum
+from environment.reward import reward_curriculum
+from environment.format import BASE_PATTERN
 
 
 FIXTURES_DIR = pathlib.Path(__file__).resolve().parent.parent

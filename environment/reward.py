@@ -6,9 +6,12 @@ from typing import Optional, List, Callable
 from pydantic import BaseModel, Field
 from textwrap import dedent
 from environment.execution import (
-    extract_format,
     verify,
     execute_answer,
+)
+from environment.format import (
+    ANSWER_FORMAT_REGEX,
+    extract_format,
 )
 
 
@@ -94,7 +97,7 @@ def reward_curriculum(
     curriculum_generation: str,
     answer_group_rewards: Optional[list[AnswerReward]] = None,
     check_format_only: bool = False,
-    format_regex: str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
+    format_regex: str = ANSWER_FORMAT_REGEX,
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
@@ -117,7 +120,6 @@ def reward_curriculum(
     extracted_curriculum = extract_format(
         text=curriculum_generation,
         regex_format=format_regex,
-        use_last_match=use_last_match,
     )
     if not extracted_curriculum:
         return CurriculumReward(
@@ -182,7 +184,7 @@ reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
 def reward_answer(
     extracted_curriculum: str,
     answer_generation: str,
-    format_regex: str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
+    format_regex: str = ANSWER_FORMAT_REGEX,
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
@@ -192,7 +194,8 @@ def reward_answer(
     """
     # check the format
     extracted_answer = extract_format(
-        text=answer_generation, regex_format=format_regex, use_last_match=use_last_match
+        text=answer_generation, 
+        regex_format=format_regex
     )
     if not extracted_answer:
         return AnswerReward(
@@ -257,7 +260,7 @@ async def _reward_answer_async(
 async def reward_answer_group(
     extracted_curriculum: str,
     answer_generations: List[str],
-    format_regex: str = r"<think>.*?</think>.*?<answer>\n```python\n(.*?)\n```.*?</answer>",
+    format_regex: str = ANSWER_FORMAT_REGEX,
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,

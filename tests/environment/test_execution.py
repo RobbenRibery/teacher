@@ -1,5 +1,4 @@
 import sys
-import importlib.util
 import textwrap
 import time
 import pytest
@@ -7,21 +6,12 @@ from pathlib import Path
 
 # Add project root to Python path
 project_root = Path(__file__).resolve().parent.parent.parent
-project_root_str = str(project_root)
-if project_root_str not in sys.path:
-    sys.path.insert(0, project_root_str)
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-# Import using importlib to ensure it works
-spec = importlib.util.spec_from_file_location(
-    "environment.execution", project_root / "environment" / "execution.py"
-)
-execution_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(execution_module)
-verify = execution_module.verify
-extract_answer = execution_module.extract_format
-execute_answer = execution_module.execute_answer
-time_limit = execution_module.time_limit
-TimeoutException = execution_module.TimeoutException
+from environment.execution import verify, execute_answer, time_limit, TimeoutException
+from environment.format import extract_format as extract_answer
+from environment.format import BASE_PATTERN
 
 
 def test_verify_success_simple():
@@ -198,8 +188,8 @@ def test_extract_answer_last_match():
     """)
     result = extract_answer(solver_generation, regex_format)
     assert result is not None
-    assert "x = 2" in result
-    assert "x = 1" not in result
+    assert "x = 1" in result
+    assert "x = 2" not in result
 
 
 def test_extract_answer_no_match():

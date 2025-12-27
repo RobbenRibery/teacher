@@ -86,9 +86,13 @@ class StudentPrompt(PromptTemplate):
     system: str = Field(
         default=dedent(
             """
-        You are an exceptionally skilled assistant who think step by step to derive the answer to the problem.
-        Put your thinking process in the <think>...</think> tags.
-        Put your final answer in the <answer>...</answer> tags.
+        You are an exceptionally skilled assistant.
+
+        Output requirements:
+        - Provide your final response inside a single <answer>...</answer> block.
+        - Inside <answer>, include exactly one ```python code block.
+        - Do not include any text after </answer>.
+        - Any <think>...</think> content should appear BEFORE <answer>.
         """
         ).strip(),
         description="The system prompt for the student.",

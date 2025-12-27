@@ -33,7 +33,7 @@ class GRPOConfig:
     """
 
     # Model configuration
-    model_name_or_path: str = "Qwen/Qwen3-0.6B"
+    model_name_or_path: str = "Qwen/Qwen3-1.7B"
 
     # Generation configuration
     teacher_group_size: int = 8
