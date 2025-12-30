@@ -11,12 +11,15 @@ dependencies = [
     "matplotlib",
     "seaborn",
     "scikit-learn",
+    "pydantic>=2.0.0",
     "pydantic-ai>=1.25.1",
     "tyro>=0.9.35",
     "torch>=2.8.0",
     "liger-kernel",
     "accelerate",
     "flash-attn>=2.8.3",
+    "wandb",
+    "rich",
 ]
 
 [project.optional-dependencies]

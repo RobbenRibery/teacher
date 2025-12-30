@@ -91,15 +91,37 @@ def setup_logger_with_file_line(
 
     return logger
 
-
 logger = setup_logger_with_file_line(__name__)
 
-
-def release_memory(vars: List[Any]):
-    for var in vars:
-        del var
+def release_memory(vars: list[Any] | None = None):
+    if vars:
+        for var in vars:
+            del var
     gc.collect()
     torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+
+
+def zero_pad_sequences(sequences: list[torch.Tensor], side: str = "left", pad_value: int = 0) -> torch.Tensor:
+    """
+    Zero pad sequences to the same length.
+    
+    Args:
+        sequences: A list of torch.Tensor objects.
+        side: A string that can be either "left" or "right".
+        pad_value: The value to use for padding.
+    
+    Returns:
+        A torch.Tensor object with all sequences padded to max length.
+    """
+    assert side in ("left", "right")
+    max_len = max(seq.size(0) for seq in sequences)  # get the max length of the sequences
+    padded_sequences = []
+    for seq in sequences:
+        pad_len = max_len - seq.size(0)  # get the padding length
+        padding = (pad_len, 0) if side == "left" else (0, pad_len)  # get the padding
+        padded_sequences.append(torch.nn.functional.pad(seq, padding, value=pad_value))  # pad the sequence
+    return torch.stack(padded_sequences, dim=0)  # stack the padded sequences
 
 
 def configure_torch_for_training():

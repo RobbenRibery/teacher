@@ -7,7 +7,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from environment.reward import reward_curriculum
-from environment.format import BASE_PATTERN
+from environment.format import ANSWER_FORMAT_REGEX
 
 
 FIXTURES_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -24,6 +24,7 @@ def test_reward_curriculum_valid_format_only():
 
     result = reward_curriculum(
         curriculum_generation=curriculum_generation,
+        format_regex=ANSWER_FORMAT_REGEX,
         check_format_only=True,
     )
 
@@ -46,6 +47,7 @@ def test_reward_curriculum_invalid_format():
 
     result = reward_curriculum(
         curriculum_generation=curriculum_generation,
+        format_regex=ANSWER_FORMAT_REGEX,
         check_format_only=True,
     )
 

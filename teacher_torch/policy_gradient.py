@@ -1,233 +1,143 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import torch
+from typing import Sequence
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
-from torch.nn.functional import pad
 
-from teacher_torch.experience import Experience, TeacherExperience, StudentExperienceBuffer
+from teacher_torch.experience import (
+    Experience, 
+    TeacherExperience,
+    StudentExperience,
+    StudentExperienceBuffer
+)
 from typing import Union
 from teacher_torch.loss import sequences_log_probs, grpo_loss
-
+from teacher_torch.configs import TrainingConfig, TrainingMetrics
+from teacher_torch.utils import release_memory, zero_pad_sequences
 from torch.optim import Optimizer
 from torch.nn import Module
 
-
-@dataclass
-class GRPOConfig:
-    """Configuration for GRPO training.
-
-    Attributes:
-        model_name_or_path: HuggingFace model identifier or local path.
-        teacher_group_size: Number of curriculum samples per seed task (G_teacher).
-        student_group_size: Number of answer samples per curriculum (G_student).
-        max_new_tokens: Maximum tokens to generate per completion.
-        temperature: Sampling temperature (higher = more random).
-        top_p: Nucleus sampling probability threshold.
-        learning_rate: Optimizer learning rate.
-        max_grad_norm: Maximum gradient norm for clipping.
-        epochs_per_step: Number of optimization epochs per rollout batch.
-        clip_eps: PPO clipping epsilon for importance ratio.
-        kl_beta: KL penalty coefficient (higher = more conservative updates).
-        log_interval: Steps between logging outputs.
+def split_experiences(experience: TeacherExperience | StudentExperienceBuffer) -> Sequence[TeacherExperience | StudentExperience]:
+    """Split an Experience object into a sequence of Experience objects.
+    
+    Splits by sample index (deduplication is handled in TeacherExperience.merge).
     """
+    if isinstance(experience, TeacherExperience):
+        split_exps = []
+        for idx in range(len(experience.completions)):
+            split_exps.append(
+                TeacherExperience(
+                    prompt=experience.prompt,
+                    completions=[experience.completions[idx]],
+                    pad_token_id=experience.pad_token_id,
+                    curriculums=[experience.curriculums[idx]] if experience.curriculums is not None else None,
+                    sequence_ids=experience.sequence_ids[idx:idx+1],
+                    sequence_attention_mask=experience.sequence_attention_mask[idx:idx+1],
+                    action_mask=experience.action_mask[idx:idx+1],
+                    action_log_probs=experience.action_log_probs[idx:idx+1],
+                    action_log_probs_ref=experience.action_log_probs_ref[idx:idx+1] if experience.action_log_probs_ref is not None else None,
+                    rewards=experience.rewards[idx:idx+1] if experience.rewards is not None else None,
+                    solved_mask=experience.solved_mask[idx:idx+1] if experience.solved_mask is not None else None,
+                    advantages=experience.advantages[idx:idx+1] if experience.advantages is not None else None,
+                    learnability=experience.learnability,
+                    only_check_format=experience.only_check_format,
+                )
+            )
+        return split_exps
+    elif isinstance(experience, StudentExperienceBuffer):
+        return experience.experiences
+    else:
+        raise ValueError(f"Unsupported experience type: {type(experience)}")
 
-    # Model configuration
-    model_name_or_path: str = "Qwen/Qwen3-1.7B"
-
-    # Generation configuration
-    teacher_group_size: int = 8
-    student_group_size: int = 16
-    max_new_tokens: int = 512
-    temperature: float = 0.7
-    top_k: int = 50
-    top_p: float = 0.9
-
-    # Training configuration
-    learning_rate: float = 1e-5
-    max_grad_norm: float = 1.0
-    epochs_per_step: int = 1
-
-    # GRPO hyperparameters
-    clip_eps: float = 0.2
-    kl_beta: float = 0.04
-    normalize_advantages: bool = True
-    solved_threshold: float = 1.0
-
-    # Training loop configuration
-    mini_batch_size: int = 4
-    logits_minibatch_size: int = 128
-
-    # Logging configuration
-    log_interval: int = 1
-
-
-@dataclass
-class TrainingMetrics:
-    """Metrics collected during a training update step.
-
-    Attributes:
-        loss: Average loss across all batches.
-        mean_kl: Average KL divergence from reference policy.
-        policy_loss: Average policy loss component.
-        grad_norm: Average gradient norm after clipping.
+def collate_experiencs(batch: Sequence[TeacherExperience | StudentExperience]) -> TeacherExperience | StudentExperience:
+    """Collate a batch of Experience objects into a single Experience object.
+    
+    Handles variable-length sequences by padding to max length in the batch.
     """
-
-    loss: float
-    mean_kl: float
-    policy_loss: float
-    grad_norm: float
-
-    def to_dict(self, prefix: str = "train/") -> dict[str, float]:
-        """Convert metrics to dictionary format.
-
-        Args:
-            prefix: Prefix to add to each key (e.g., "train/", "student/train/").
-
-        Returns:
-            Dictionary with prefixed keys.
-        """
-        return {
-            f"{prefix}loss": self.loss,
-            f"{prefix}mean_kl": self.mean_kl,
-            f"{prefix}policy_loss": self.policy_loss,
-            f"{prefix}grad_norm": self.grad_norm,
-        }
-
-
-def zero_pad_sequences(
-    sequences: list[torch.Tensor], side: str = "left", value: int = 0
-) -> torch.Tensor:
-    """Zero pad sequences to the same length."""
-    assert side in ("left", "right")
-    max_len = max(seq.size(0) for seq in sequences)
-    padded_sequences = []
-    for seq in sequences:
-        pad_len = max_len - seq.size(0)
-        padding = (pad_len, 0) if side == "left" else (0, pad_len)
-        padded_sequences.append(pad(seq, padding, value=value))
-    return torch.stack(padded_sequences, dim=0)
-
-
-def collate_experience(batch: list[Experience]) -> Experience:
-    """Collate a batch of Experience objects into a single Experience object."""
-    # keys to process
-    keys = [
-        "sequences",
-        "attention_mask",
-        "action_mask",
-        "action_log_probs",
-        "returns",
-        "solved_mask",
-        "advantages",
-        "learnability",
-        "prompt",
-        "completion",
-        "role",
-        "pad_token_id",
-    ]
-
-    batch_data = {}
+    batch_data: dict[str, torch.Tensor | list[str] | str | None] = {}
 
     # We need pad_token_id from the first item
     pad_token_id = batch[0].pad_token_id
+    batch_data["pad_token_id"] = pad_token_id
+
+    # Automatically get keys from the dataclass, excluding pad_token_id which is handled above
+    keys = [f.name for f in fields(batch[0]) if f.name != "pad_token_id"]
 
     for key in keys:
-        vals = [getattr(item, key) for item in batch]
-
-        # Handle None (if any is None, the result is None)
-        if any(v is None for v in vals):
+        if key in {"prompt", "learnability", "only_check_format", "source_curriculum"}:
             batch_data[key] = None
             continue
 
+        vals = [getattr(item, key) for item in batch]
+        if any(v is None for v in vals):
+            batch_data[key] = None
+            continue
+            
         if isinstance(vals[0], torch.Tensor):
-            # Tensors need special handling based on dimensions
-            # All input tensors are (G, ...). We want to output (B*G, ...)
-            # Flatten the batch of groups into a single list of items
-
-            flat_vals = []
-            for v in vals:
-                # v is (G, ...)
-                # Split it into G items to pad them individually if needed?
-                # Actually, sequences are (G, L). We want to pad all BG sequences to max L.
-                # So we flatten to list of (1, L) or just list of (L) tensors?
-                # v[i] is (L) or (L-1) etc.
-                for i in range(v.size(0)):
-                    flat_vals.append(v[i])
-
-            if key in [
-                "sequences",
-                "attention_mask",
-                "action_mask",
-                "action_log_probs",
-                "log_probs_ref",
-                "kl",
-            ]:
-                # These have variable sequence lengths. Pad them.
-                padding_value = 0
-                if key == "sequences":
-                    padding_value = pad_token_id
-
-                batch_data[key] = zero_pad_sequences(
-                    flat_vals, side="left", value=padding_value
-                )
+            # Handle variable-length sequences with padding
+            if vals[0].ndim >= 2:  # Multi-dimensional tensors (sequence data)
+                # Determine pad value based on field name
+                if key == "sequence_ids":
+                    pad_value = pad_token_id
+                elif key in {"sequence_attention_mask"}:
+                    pad_value = 0
+                elif key == "action_mask":
+                    pad_value = 0  # Will be cast to False for BoolTensor
+                elif key in {"action_log_probs", "action_log_probs_ref"}:
+                    pad_value = 0
+                else:
+                    pad_value = 0  # Default padding value
+                
+                # Pad sequences along the sequence dimension
+                sequences = [v for v in vals]
+                reshaped_vals = zero_pad_sequences(sequences, side="right", pad_value=pad_value)
+                
+                # Convert to correct dtype for action_mask
+                if key == "action_mask":
+                    reshaped_vals = reshaped_vals.bool()
+            elif vals[0].ndim == 1:
+                # For 1D tensors (rewards, advantages), just stack
+                reshaped_vals = torch.stack(vals, dim=0)
+                reshaped_vals = reshaped_vals.reshape(-1)
             else:
-                # returns, solved_mask, advantages, learnability are (G,) or (G, 1)
-                # Just stack/cat. flattening flat_vals gives list of scalars/1-element tensors
-                # torch.stack(flat_vals) works if they are tensors.
-                # If v[i] is scalar tensor, stack makes (BG,).
-                batch_data[key] = torch.stack(flat_vals, dim=0)
-
+                reshaped_vals = torch.stack(vals, dim=0)
+            batch_data[key] = reshaped_vals
         elif isinstance(vals[0], list):
             # Lists (prompt, completion): extend
-            new_list = []
-            for v in vals:
-                new_list.extend(v)
-            batch_data[key] = new_list
+            batch_data[key] = [x for v in vals for x in v]
         else:
-            # Scalar or string (role, pad_token_id)
-            # Take the first one
-            batch_data[key] = vals[0]
+            raise ValueError(f"Unsupported type: {type(vals[0])} for key {key}")
 
-    return Experience(**batch_data)
-
+    return batch[0].__class__(**batch_data)
 
 def update(
     model: Module,
-    ref_model: Module,
     optimizer: Optimizer,
-    experience: Union[TeacherExperience, StudentExperienceBuffer],
-    config: GRPOConfig,
-    device: torch.device,
+    experience: TeacherExperience | StudentExperienceBuffer,
+    training_config: TrainingConfig,
+    ref_model: Module | None = None,
 ) -> TrainingMetrics:
     """Update the policy model using the collected experience.
 
     Args:
         model: The policy model to update.
-        ref_model: Reference model for KL regularization.
+        ref_model: Reference model for KL regularization. If None, no reference model will be used.
         optimizer: Optimizer for updating model parameters.
-        experience: TeacherExperience (single) or StudentExperienceBuffer (multiple experiences).
+        experience: ExperienceBuffer (multiple experiences).
         config: Training configuration.
-        device: Device to run computation on.
 
     Returns:
         TrainingMetrics if any steps were performed, None otherwise.
     """
     model.train()
 
-    # Convert TeacherExperience to a list for DataLoader
-    if isinstance(experience, TeacherExperience):
-        experience_list = [experience]
-    else:
-        # StudentExperienceBuffer - already iterable
-        experience_list = experience
-
     # DataLoader
     dataloader = DataLoader(
-        experience_list,
-        batch_size=config.mini_batch_size,
+        split_experiences(experience),
+        batch_size=training_config.mini_batch_size,
         shuffle=True,
-        collate_fn=collate_experience,
+        collate_fn=collate_experiencs,
     )
 
     # Metrics
@@ -237,43 +147,43 @@ def update(
     total_grad_norm = 0.0
     steps = 0
 
-    for _ in range(config.epochs_per_step):
+    device = model.device
+    for _ in range(training_config.epochs_per_step):
         for batch in dataloader:
-            batch: Experience = batch.to(device)
+            batch: TeacherExperience | StudentExperience = batch.to(device)
             optimizer.zero_grad()
-
-            # Forward pass - current policy
-            # batch.sequences: (B*G, L)
-            log_probs, _ = sequences_log_probs(
+            
+            # Compute current policy log probs (without ref model if we have cached probs)
+            log_probs, _, _ = sequences_log_probs(
                 model=model,
-                sequence_ids=batch.sequences,
-                attention_mask=batch.attention_mask,
+                sequence_ids=batch.sequence_ids,
+                sequence_attention_mask=batch.sequence_attention_mask,
                 return_entropy=False,
-                logits_minibatch_size=config.logits_minibatch_size,
+                logits_minibatch_size=training_config.logits_minibatch_size,
+                ref_model=None,
             )
-
-            # Reference policy (compute if needed)
-            log_probs_ref = batch.log_probs_ref
-            if log_probs_ref is None and config.kl_beta > 0:
-                with torch.no_grad():
-                    log_probs_ref, _ = sequences_log_probs(
-                        model=ref_model,
-                        sequence_ids=batch.sequences,
-                        attention_mask=batch.attention_mask,
-                        return_entropy=False,
-                        logits_minibatch_size=config.logits_minibatch_size,
-                    )
 
             # GRPO Loss
-            loss, mean_kl, policy_loss = grpo_loss(
-                log_probs=log_probs,
-                old_log_probs=batch.action_log_probs,
-                ref_log_probs=log_probs_ref,
-                advantages=batch.advantages,
-                action_mask=batch.action_mask,
-                clip_eps=config.clip_eps,
-                kl_beta=config.kl_beta,
-            )
+            grpo_kwargs = {
+                "log_probs": log_probs,
+                "old_log_probs": batch.action_log_probs,
+                "ref_log_probs": batch.action_log_probs_ref,
+                "advantages": batch.advantages,
+                "action_mask": batch.action_mask,
+            }
+            
+            # Add optional GRPO hyperparameters if they exist and are not None
+            if hasattr(training_config, 'clip_eps'):
+                if getattr(training_config, 'clip_eps') is not None:
+                    grpo_kwargs['clip_eps'] = getattr(training_config, 'clip_eps')
+            if hasattr(training_config, 'kl_beta'):
+                if getattr(training_config, 'kl_beta') is not None:
+                    grpo_kwargs['kl_beta'] = getattr(training_config, 'kl_beta')
+                else:
+                    if ref_model is not None:
+                        raise ValueError("kl_beta must be set if ref_model is provided")
+            
+            loss, mean_kl, policy_loss = grpo_loss(**grpo_kwargs)
 
             if not loss.isfinite():
                 print(f"Loss not finite, skipping: {loss}")
@@ -282,7 +192,8 @@ def update(
             loss.backward()
 
             grad_norm = clip_grad_norm_(
-                model.parameters(), max_norm=config.max_grad_norm
+                model.parameters(), 
+                max_norm=training_config.max_grad_norm,
             )
 
             optimizer.step()
@@ -293,7 +204,7 @@ def update(
             total_grad_norm += grad_norm.item()
             steps += 1
 
-            del log_probs, log_probs_ref, loss
+            release_memory([log_probs, loss, batch])
 
     return TrainingMetrics(
         loss=total_loss / steps,

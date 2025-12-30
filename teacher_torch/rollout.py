@@ -72,16 +72,17 @@ RewardFn = Callable[[str], Type[Reward]]
 @torch.inference_mode()
 def rollout(
     model: PreTrainedModel,
+    reward_fn: RewardFn,
     tokenizer: PreTrainedTokenizer,
     prompts: list[str],
     generation_config: GenerationConfig,
     config: RolloutConfig,
     role: str,
     solved_threshold: float = 1.0,
-    reward_fn: Optional[RewardFn] = None,
     logits_minibatch_size: int = 128,
     only_check_format: bool = False,
     source_curriculums: Optional[list[str]] = None,
+    ref_model: Optional[PreTrainedModel] = None,
 ) -> tuple[Union[TeacherExperience, StudentExperienceBuffer], RolloutMetric]:
     """
     Perform a single rollout: sample responses and compute experiences.
@@ -95,6 +96,7 @@ def rollout(
 
     Args:
         model: The policy model to sample from.
+        reward_fn: Reward function to score the completions.
         tokenizer: Tokenizer for the model.
         prompts: List of prompt strings.
         generation_config: HuggingFace generation config.
@@ -107,7 +109,7 @@ def rollout(
         only_check_format: Whether to only check format without computing advantages.
         source_curriculums: For student role, list of curriculum strings that seeded
             each prompt. Required when role=="student" to create StudentExperienceBuffer.
-
+        ref_model: The reference model to use for importance sampling.
     Returns:
         Tuple of:
             - TeacherExperience or StudentExperienceBuffer: Container with all data
@@ -130,6 +132,8 @@ def rollout(
         ...     role="student",
         ... )
     """
+    if not reward_fn:
+        raise ValueError("Reward function is required")
     # Sanity check: generation config must match group_size
     assert generation_config.num_return_sequences == config.group_size, (
         f"generation_config.num_return_sequences ({generation_config.num_return_sequences}) "
@@ -158,8 +162,9 @@ def rollout(
 
     # === Step 2: Compute old log probs (behavior policy) ===
     # These are needed for importance sampling in PPO/GRPO
-    action_log_probs, entropy = sequences_log_probs(
+    action_log_probs, entropy, ref_log_probs = sequences_log_probs(
         model=model,
+        ref_model=ref_model,
         sequence_ids=sampling_output.sequence_ids,
         sequence_attention_mask=sampling_output.sequence_attention_mask,
         return_entropy=True,
@@ -237,6 +242,7 @@ def rollout(
             pad_token_id=tokenizer.pad_token_id,
             action_log_probs=action_log_probs,
             source_curriculums=source_curriculums,
+            action_log_probs_ref=ref_log_probs,
             rewards=rewards,
             advantages=advantages,
             solved_mask=solved_mask,
@@ -248,6 +254,7 @@ def rollout(
             sampling_output=sampling_output,
             pad_token_id=tokenizer.pad_token_id,
             action_log_probs=action_log_probs,
+            action_log_probs_ref=ref_log_probs,
             rewards=rewards,
             advantages=advantages,
             learnability=learnability,

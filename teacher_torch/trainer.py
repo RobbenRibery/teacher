@@ -17,17 +17,24 @@ Key features:
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
-from typing import Optional, Any, Callable
+from dataclasses import dataclass, asdict
+from typing import Optional, Any, Callable, Protocol
 
 import torch
-from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
+from transformers import GenerationConfig
 
 from teacher_torch.experience import TeacherExperience, StudentExperienceBuffer
 from teacher_torch.rollout import rollout, RolloutMetric, RolloutConfig
 from teacher_torch.sampling import SamplingOutput
-from teacher_torch.utils import load_model_tokenizer, configure_torch_for_training
-from teacher_torch.policy_gradient import update, GRPOConfig
+from teacher_torch.utils import (
+    setup_logger_with_file_line,
+    load_model_tokenizer, 
+)
+from teacher_torch.policy_gradient import update 
+from teacher_torch.configs import (
+    GRPOTrainingConfig,
+    TrainingMetrics,
+)
 
 from environment.reward import CurriculumReward
 from environment.format import ANSWER_FORMAT_REGEX
@@ -35,8 +42,8 @@ from environment.format import ANSWER_FORMAT_REGEX
 from curriculum.prompt_template import TeacherPrompt, StudentPrompt
 from curriculum.tasks import BooleanConstraintsSatisfaction
 
-import tyro
-
+import wandb
+logger = setup_logger_with_file_line(__name__)
 
 @dataclass
 class RunnerMetrics:
@@ -132,42 +139,20 @@ class GRPOTrainer:
         >>> metrics = trainer.train(seed_tasks, num_steps=100)
     """
 
-    def __init__(
-        self,
-        config: GRPOConfig,
-        model: Optional[PreTrainedModel] = None,
-        tokenizer: Optional[PreTrainedTokenizer] = None,
-        device: Optional[torch.device] = None,
-        teacher_generation_config: Optional[GenerationConfig] = None,
-        student_generation_config: Optional[GenerationConfig] = None,
-        seed: int = 42,
-    ) -> None:
+    def __init__(self, train_config: GRPOTrainingConfig) -> None:
         """Initialize the GRPO trainer.
 
         Args:
-            config: Training configuration object.
-            model: Pre-loaded model (optional, will load from config if None).
-            tokenizer: Pre-loaded tokenizer (optional).
-            device: Compute device (auto-detected if None).
-            teacher_generation_config: Generation configuration for teacher.
-            student_generation_config: Generation configuration for student.
-            seed: Random seed for reproducibility.
+            train_config: Training configuration object.
         """
-        self.config = config
-        self.device = device or torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
-        self.seed = seed
+        self.train_config = train_config
+        self.seed = train_config.seed
 
         # Load or use provided model/tokenizer
-        if model is None or tokenizer is None:
-            self.model, self.tokenizer = load_model_tokenizer(
-                config.model_name_or_path,
-                device_map="auto" if torch.cuda.is_available() else None,
-            )
-        else:
-            self.model = model
-            self.tokenizer = tokenizer
+        self.model, self.tokenizer = load_model_tokenizer(
+            train_config.mode_name_or_path,
+            device_map="auto" if torch.cuda.is_available() else None,
+        )
 
         # Create frozen reference model for KL regularization
         self.ref_model = copy.deepcopy(self.model)
@@ -178,7 +163,7 @@ class GRPOTrainer:
         # Optimizer
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
-            lr=config.learning_rate,
+            lr=train_config.learning_rate,
         )
 
         # Task and prompt templates
@@ -190,22 +175,8 @@ class GRPOTrainer:
         self.format_regex = ANSWER_FORMAT_REGEX
 
         # generation config
-        self.teacher_generation_config = teacher_generation_config or GenerationConfig(
-            max_new_tokens=config.max_new_tokens,
-            temperature=config.temperature,
-            top_k=config.top_k,
-            top_p=config.top_p,
-            do_sample=True,
-            num_return_sequences=config.teacher_group_size,
-        )
-        self.student_generation_config = student_generation_config or GenerationConfig(
-            max_new_tokens=config.max_new_tokens,
-            temperature=config.temperature,
-            top_k=config.top_k,
-            top_p=config.top_p,
-            do_sample=True,
-            num_return_sequences=config.student_group_size,
-        )
+        self.teacher_generation_config = GenerationConfig(**asdict(train_config.teacher_generation_config))
+        self.student_generation_config = GenerationConfig(**asdict(train_config.student_generation_config))
 
     def _build_teacher_prompt(self) -> str:
         """Build formatted teacher prompt from seed task.
@@ -246,9 +217,7 @@ class GRPOTrainer:
 
     def rollout_teacher(
         self,
-        teacher_reward_fn: Optional[Callable[[str], CurriculumReward]] = None,
-        min_legit_problems: int = 0,
-        max_trial_attempts: int = 10,
+        teacher_reward_fn: Callable[[str], CurriculumReward],
     ) -> tuple[TeacherExperience, RolloutMetric]:
         """Execute teacher rollout phase.
 
@@ -268,18 +237,20 @@ class GRPOTrainer:
                 - experience: TeacherExperience with generated curricula.
                 - metrics: RolloutMetric containing generation statistics (from last attempt).
         """
+        if not teacher_reward_fn:
+            raise ValueError("Teacher reward function is required")
         # Build teacher prompts (single prompt)
         prompts = [self._build_teacher_prompt()]
 
         # Create rollout config
         rollout_config = RolloutConfig(
-            group_size=self.config.teacher_group_size,
+            group_size=self.train_config.teacher_group_size,
             seed=self.seed,
-            normalize_advantages=self.config.normalize_advantages,
+            normalize_advantages=self.train_config.normalize_advantages,
         )
 
         # If we don't need to filter for correct formats, just do one rollout
-        if min_legit_problems <= 0:
+        if self.train_config.minimal_legit_curriculum_per_iteration <= 0:
             return rollout(
                 model=self.model,
                 tokenizer=self.tokenizer,
@@ -287,10 +258,11 @@ class GRPOTrainer:
                 generation_config=self.teacher_generation_config,
                 config=rollout_config,
                 role="teacher",
-                solved_threshold=self.config.solved_threshold,
-                reward_fn=teacher_reward_fn if teacher_reward_fn is not None else None,
-                logits_minibatch_size=self.config.logits_minibatch_size,
-                only_check_format=teacher_reward_fn is not None,
+                solved_threshold=self.train_config.solved_threshold,
+                reward_fn=teacher_reward_fn,
+                logits_minibatch_size=self.train_config.logits_minibatch_size,
+                only_check_format=True,
+                ref_model=self.ref_model,
             )
         
         # Otherwise, accumulate correctly formatted curricula
@@ -298,7 +270,13 @@ class GRPOTrainer:
         attempts = 0
         metrics = None
         
-        while (curated_experience is None or len(curated_experience.curriculums or []) < min_legit_problems) and attempts < max_trial_attempts:
+        while (
+               curated_experience is None or 
+               len(curated_experience.curriculums or []) < self.train_config.minimal_legit_curriculum_per_iteration
+            ) and (
+                attempts < self.train_config.max_trail_attempts_per_iteration
+            ):
+            # Rollout
             experience, metrics = rollout(
                 model=self.model,
                 tokenizer=self.tokenizer,
@@ -306,10 +284,11 @@ class GRPOTrainer:
                 generation_config=self.teacher_generation_config,
                 config=rollout_config,
                 role="teacher",
-                solved_threshold=self.config.solved_threshold,
+                solved_threshold=self.train_config.solved_threshold,
                 reward_fn=teacher_reward_fn,
-                logits_minibatch_size=self.config.logits_minibatch_size,
+                logits_minibatch_size=self.train_config.logits_minibatch_size,
                 only_check_format=True,  # Must check format when filtering
+                ref_model=self.ref_model,
             )
             
             # Get correctly formatted experience
@@ -331,9 +310,8 @@ class GRPOTrainer:
 
     def rollout_student(
         self,
-        problems: list[str],
-        source_curriculums: list[str],
-        student_reward_fn: Optional[Callable[[str], CurriculumReward]] = None,
+        curriculums: list[str],
+        student_reward_fn: Callable[[str], CurriculumReward],
     ) -> tuple[StudentExperienceBuffer, RolloutMetric]:
         """Execute student rollout phase.
 
@@ -341,10 +319,7 @@ class GRPOTrainer:
         and computes rewards using the environment.
 
         Args:
-            problems: List of problems for the student to solve.
-            source_curriculums: List of curriculum strings that seeded each problem.
-                Used to track which teacher-generated curriculum each student
-                experience originated from.
+            curriculums: List of curriculums for the student to solve.
             student_reward_fn: Optional reward function for student answers.
 
         Returns:
@@ -352,14 +327,16 @@ class GRPOTrainer:
                 - experience: StudentExperienceBuffer with generated answers.
                 - metrics: RolloutMetric containing generation statistics.
         """
+        if not student_reward_fn:
+            raise ValueError("Student reward function is required")
         # Format prompts for student (apply chat template)
-        formatted_prompts = [self._build_student_prompt(p) for p in problems]
+        formatted_prompts = [self._build_student_prompt(c) for c in curriculums]
 
         # Create rollout config
         rollout_config = RolloutConfig(
-            group_size=self.config.student_group_size,
+            group_size=self.train_config.student_group_size,
             seed=self.seed,
-            normalize_advantages=self.config.normalize_advantages,
+            normalize_advantages=self.train_config.normalize_advantages,
         )
 
         # Generate answers with source_curriculums for tracking
@@ -370,15 +347,16 @@ class GRPOTrainer:
             generation_config=self.student_generation_config,
             config=rollout_config,
             role="student",
-            solved_threshold=self.config.solved_threshold,
+            solved_threshold=self.train_config.solved_threshold,
             reward_fn=student_reward_fn,
-            logits_minibatch_size=self.config.logits_minibatch_size,
-            only_check_format=student_reward_fn is not None,
-            source_curriculums=source_curriculums,
+            logits_minibatch_size=self.train_config.logits_minibatch_size,
+            only_check_format=False,
+            source_curriculums=curriculums,
+            ref_model=self.ref_model,
         )
 
     def train_step(
-        self, teacher_exp: TeacherExperience, student_exp: StudentExperienceBuffer
+        self, teacher_exp: TeacherExperience, student_exps: StudentExperienceBuffer
     ) -> dict[str, float]:
         """Perform a single training step with separate updates for student and teacher.
 
@@ -392,7 +370,7 @@ class GRPOTrainer:
 
         Args:
             teacher_exp: Teacher experience from teacher rollout.
-            student_exp: Student experience buffer from student rollout.
+            student_exps: Student experience buffers from student rollout.
 
         Returns:
             Combined metrics from both updates.
@@ -400,28 +378,26 @@ class GRPOTrainer:
         # Step 1: Update teacher rewards based on student performance
         # Teacher reward = solved_rate * (1 - solved_rate) per curriculum
         teacher_exp.update_teacher_rewards(
-            student_exp,
-            normalize_advantages=self.config.normalize_advantages,
+            student_buffer=student_exps,
+            normalize_advantages=self.train_config.normalize_advantages,
         )
 
         # Step 2: Update using student experience
-        student_metrics = update(
+        student_metrics:TrainingMetrics = update(
             model=self.model,
-            ref_model=self.ref_model,
             optimizer=self.optimizer,
-            experience=student_exp,
-            config=self.config,
-            device=self.device,
+            experience=student_exps,
+            training_config=self.train_config,
+            ref_model=self.ref_model,
         )
 
         # Step 3: Update using teacher experience (with updated rewards)
-        teacher_metrics = update(
+        teacher_metrics:TrainingMetrics = update(
             model=self.model,
-            ref_model=self.ref_model,
             optimizer=self.optimizer,
             experience=teacher_exp,
-            config=self.config,
-            device=self.device,
+            training_config=self.train_config,
+            ref_model=self.ref_model,
         )
 
         # Combine metrics with prefixes
@@ -446,11 +422,9 @@ class GRPOTrainer:
 
     def train(
         self,
-        seed_tasks: list[str],
-        num_steps: int = 100,
-        teacher_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
-        student_reward_fn: Optional[Callable[[SamplingOutput], dict]] = None,
-        logger: Optional[Callable[[dict[str, Any]], None]] = None,
+        teacher_reward_fn: Optional[Callable[[SamplingOutput], dict]],
+        student_reward_fn: Optional[Callable[[SamplingOutput], dict]],
+        wandb_logger: Optional[wandb.log] = None,
     ) -> list[RunnerMetrics]:
         """Run the main GRPO training loop.
 
@@ -460,8 +434,6 @@ class GRPOTrainer:
         3. GRPO optimization step
 
         Args:
-            seed_tasks: List of seed task descriptions for curriculum generation.
-            num_steps: Total number of training steps.
             teacher_reward_fn: Reward function for teacher rollout.
             student_reward_fn: Reward function for student rollout.
             logger: Optional callback for logging metrics (e.g., wandb.log).
@@ -469,39 +441,39 @@ class GRPOTrainer:
         Returns:
             List of RunnerMetrics objects, one per training step.
         """
+        if not teacher_reward_fn:
+            raise ValueError("Teacher reward function is required")
+        if not student_reward_fn:
+            raise ValueError("Student reward function is required")
+
         all_metrics: list[RunnerMetrics] = []
 
-        for step in range(num_steps):
-            print(f"\n=== Step {step + 1}/{num_steps} ===")
+        for step in range(self.train_config.num_training_steps):
+            logger.info(f"\n=== Step {step + 1}/{self.train_config.num_training_steps} ===")
 
             # Phase 1: Teacher generates curricula
-            print("Teacher generating curricula...")
+            logger.info("Teacher generating curricula...")
             teacher_exp, teacher_rollout_metrics = self.rollout_teacher(
                 teacher_reward_fn=teacher_reward_fn,
             )
 
-            # Extract generated curricula from teacher experience
-            # curriculums contains the extracted python programs
-            if teacher_exp.curriculums is not None:
-                # Use extracted curriculums (python programs)
-                curriculum_generations = teacher_exp.curriculums
-                source_curriculums = teacher_exp.curriculums
-            else:
-                # Fallback to completions if no curriculums extracted
-                curriculum_generations = teacher_exp.completions
-                source_curriculums = teacher_exp.completions
+            if teacher_exp.curriculums is None:
+                logger.warning("Teacher failed to generate valid curricula. Skipping step.")
+                continue
 
             # Phase 2: Student solves curricula
-            print("Student solving curricula...")
-            student_exp, student_rollout_metrics = self.rollout_student(
-                problems=curriculum_generations,
-                source_curriculums=source_curriculums,
+            logger.info("Student solving curricula...")
+            student_exps, student_rollout_metrics = self.rollout_student(
+                curriculums=teacher_exp.curriculums,
                 student_reward_fn=student_reward_fn,
             )
 
             # Phase 3: GRPO optimization
-            print("Training...")
-            train_metrics = self.train_step(teacher_exp, student_exp)
+            logger.info("Updating model weights...")
+            train_metrics:dict[str, float] = self.train_step(
+                teacher_exp=teacher_exp,
+                student_exps=student_exps,
+            )
 
             # Create RunnerMetrics object
             runner_metrics = RunnerMetrics(
@@ -533,103 +505,10 @@ class GRPOTrainer:
             all_metrics.append(runner_metrics)
 
             # Logging
-            if step % self.config.log_interval == 0:
+            if step % self.train_config.log_interval == 0:
                 metrics_dict = runner_metrics.to_dict()
-                print(f"Metrics: {metrics_dict}")
-                if logger:
-                    logger(metrics_dict)
+                logger.info(f"Metrics: {metrics_dict}")
+                if wandb_logger:
+                    wandb_logger(metrics_dict)
 
         return all_metrics
-
-
-@dataclass
-class CliArgs:
-    """Command-line arguments for GRPO training."""
-
-    # Model configuration
-    model_name_or_path: str = "Qwen/Qwen3-0.6B"
-
-    # Generation configuration
-    teacher_group_size: int = 8
-    student_group_size: int = 16
-    max_new_tokens: int = 512
-    temperature: float = 0.7
-    top_k: int = 50
-    top_p: float = 0.9
-
-    # Training configuration
-    learning_rate: float = 1e-5
-    max_grad_norm: float = 1.0
-    epochs_per_step: int = 1
-
-    # GRPO hyperparameters
-    clip_eps: float = 0.2
-    kl_beta: float = 0.04
-    normalize_advantages: bool = True
-    solved_threshold: float = 1.0
-
-    # Training loop configuration
-    mini_batch_size: int = 4
-    logits_minibatch_size: int = 128
-
-    # Logging configuration
-    log_interval: int = 1
-
-    # Training loop arguments
-    num_steps: int = 100
-    seed: int = 42
-
-    # Seed task (can be provided as a single string or file path)
-    seed_task: str = """
-        Design a problem where the student must find an integer x that satisfies:
-        - Mathematical constraints involving arithmetic operations
-        - The solution should require multi-step reasoning
-    """
-
-
-def main(args: CliArgs = tyro.cli(CliArgs)) -> None:
-    """Main entry point for GRPO training."""
-    # Configure torch for bfloat16 training with dynamo optimizations
-    configure_torch_for_training()
-
-    # Convert CliArgs to GRPOConfig
-    config = GRPOConfig(
-        model_name_or_path=args.model_name_or_path,
-        teacher_group_size=args.teacher_group_size,
-        student_group_size=args.student_group_size,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        top_p=args.top_p,
-        learning_rate=args.learning_rate,
-        max_grad_norm=args.max_grad_norm,
-        epochs_per_step=args.epochs_per_step,
-        clip_eps=args.clip_eps,
-        kl_beta=args.kl_beta,
-        normalize_advantages=args.normalize_advantages,
-        solved_threshold=args.solved_threshold,
-        mini_batch_size=args.mini_batch_size,
-        logits_minibatch_size=args.logits_minibatch_size,
-        log_interval=args.log_interval,
-    )
-
-    # Create trainer
-    trainer = GRPOTrainer(config, seed=args.seed)
-
-    # Prepare seed tasks
-    seed_tasks = [args.seed_task.strip()]
-
-    # Run training
-    metrics = trainer.train(
-        seed_tasks=seed_tasks,
-        num_steps=args.num_steps,
-    )
-
-    print("\nTraining complete!")
-    if metrics:
-        final_metrics = metrics[-1]
-        print(f"Final metrics: {final_metrics.to_dict()}")
-
-
-if __name__ == "__main__":
-    main()

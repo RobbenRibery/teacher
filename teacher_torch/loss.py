@@ -158,11 +158,11 @@ def compute_kl_penalty(
 def grpo_loss(
     log_probs: torch.Tensor,
     old_log_probs: torch.Tensor,
-    ref_log_probs: torch.Tensor,
     advantages: torch.Tensor,
     action_mask: torch.Tensor,
     clip_eps: float = 0.2,
     kl_beta: float = 0.04,
+    ref_log_probs: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute GRPO loss with PPO clipping and KL regularization.
 
@@ -177,8 +177,8 @@ def grpo_loss(
             Shape: (batch_size, seq_len)
         old_log_probs: Behavior policy log probabilities from rollout.
             Shape: (batch_size, seq_len)
-        ref_log_probs: Reference policy log probabilities (frozen model).
-            Shape: (batch_size, seq_len)
+        ref_log_probs: Optional[Reference policy log probabilities (frozen model).
+            Shape: (batch_size, seq_len)]
         advantages: Group-relative advantages for each sequence.
             Shape: (batch_size,)
             Should be normalized within groups (mean=0, std=1).
@@ -209,10 +209,12 @@ def grpo_loss(
     )
 
     # KL penalty
-    mean_kl = compute_kl_penalty(log_probs, ref_log_probs, action_mask)
-
-    # Combined loss
-    total_loss = policy_loss + kl_beta * mean_kl
+    if ref_log_probs is not None:
+        mean_kl = compute_kl_penalty(log_probs, ref_log_probs, action_mask)
+        total_loss = policy_loss + kl_beta * mean_kl
+    else:
+        mean_kl = torch.tensor(0.0, device=log_probs.device)
+        total_loss = policy_loss
 
     return total_loss, mean_kl, policy_loss
 
@@ -303,9 +305,11 @@ def sequences_log_probs(
     sequence_attention_mask: torch.Tensor,
     return_entropy: bool = True,
     logits_minibatch_size: int = 128,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ref_model: PreTrainedModel | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
     """
-    Computes the log probabilities of the output ids from the logits.
+    Computes the log probabilities of the output ids from the logits for both
+    the current model and optionally a reference model in parallel using CUDA streams.
 
     Args:
         model (PreTrainedModel): The model to compute the log probabilities for.
@@ -313,44 +317,114 @@ def sequences_log_probs(
             (num_samples * group_size, seq_len)
         sequence_attention_mask (torch.Tensor): The attention mask to compute the log probabilities for.
             (num_samples * group_size, seq_len)
+        return_entropy (bool): Whether to return entropy for the current model. Default: True.
+        logits_minibatch_size (int): Batch size for processing logits. Default: 128.
+        ref_model (PreTrainedModel | None): The reference model to compute log probs for.
+            If None, ref_log_probs will be None in the output.
+        log_probs_ref (torch.Tensor | None): The log probabilities from the reference model.
+            If None, ref_log_probs will be computed from the reference model.
 
     Returns:
-        torch.Tensor: The log probabilities of the output ids. (num_samples * group_size, seq_len-1)
+        tuple containing:
+            - log_probs: The log probabilities from the current model. (num_samples * group_size, seq_len-1)
+            - entropy: The entropy from the current model (None if return_entropy=False).
+            - ref_log_probs: The log probabilities from the reference model (None if ref_model is None).
     """
     token_logprobs: list[torch.Tensor] = []
+    ref_token_logprobs: list[torch.Tensor] = []
     if return_entropy:
         token_entropy: list[torch.Tensor] = []
+
+    # Create CUDA streams for parallel execution
+    device = sequence_ids.device
+    use_cuda = device.type == "cuda"
+    if use_cuda and ref_model is not None:
+        stream_model = torch.cuda.Stream(device=device)
+        stream_ref = torch.cuda.Stream(device=device)
 
     for i in range(0, sequence_ids.shape[0], logits_minibatch_size):
         mini_ids = sequence_ids[i : i + logits_minibatch_size]
         mini_mask = sequence_attention_mask[i : i + logits_minibatch_size]
-        mini_output = model(
-            input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
-        )
-        mini_logits: torch.FloatTensor = mini_output["logits"]
+        
+        if use_cuda and ref_model is not None:
+            # Parallel forward passes using CUDA streams
+            mini_logits = None
+            ref_mini_logits = None
+            
+            # Launch model forward on stream_model
+            with torch.cuda.stream(stream_model):
+                mini_output = model(
+                    input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
+                )
+                mini_logits = mini_output["logits"]
+                del mini_output
+            
+            # Launch ref_model forward on stream_ref (inference mode for speed)
+            with torch.cuda.stream(stream_ref):
+                with torch.inference_mode():
+                    ref_mini_output = ref_model(
+                        input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
+                    )
+                    ref_mini_logits = ref_mini_output["logits"]
+                    del ref_mini_output
+            
+            # Synchronize both streams before processing logits
+            stream_model.synchronize()
+            stream_ref.synchronize()
+        else:
+            # Sequential execution (CPU or no ref_model)
+            mini_output = model(
+                input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
+            )
+            mini_logits:torch.FloatTensor = mini_output["logits"]
+            del mini_output
+            
+            if ref_model is not None:
+                with torch.inference_mode():
+                    ref_mini_output = ref_model(
+                        input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
+                    )
+                    ref_mini_logits:torch.FloatTensor = ref_mini_output["logits"]
+                    del ref_mini_output
+            else:
+                ref_mini_logits = None
+
         logger.info(f"Mini logits shape: {mini_logits.shape}")
+        del mini_mask
 
-        del mini_mask, mini_output
-
+        # Compute log probs for current model
         # logits: [batch_size * num_rollouts, seq_len, vocab_size]
         log_probs, entropy = _sequence_log_probs_from_logits(
             logits=mini_logits[:, :-1],
-            output_ids=mini_ids[
-                :, 1:
-            ],  # right shift 1 block to get the actual output ids
+            output_ids=mini_ids[:, 1:],  # right shift 1 block to get the actual output ids
             return_entropy=return_entropy,
         )
-
         token_logprobs.append(log_probs)
         if return_entropy:
             token_entropy.append(entropy)
+        
+        # Compute log probs for reference model (no entropy needed)
+        if ref_mini_logits is not None:
+            ref_log_probs, _ = _sequence_log_probs_from_logits(
+                logits=ref_mini_logits[:, :-1],
+                output_ids=mini_ids[:, 1:],
+                return_entropy=False,
+            )
+            ref_token_logprobs.append(ref_log_probs)
+            del ref_mini_logits
 
     del mini_logits, mini_ids
     torch.cuda.empty_cache()
+    
     reconstructed_logprobs = torch.cat(token_logprobs, dim=0)
     reconstructed_entropy = torch.cat(token_entropy, dim=0) if return_entropy else None
+    reconstructed_ref_logprobs = torch.cat(ref_token_logprobs, dim=0) if ref_model is not None else None
+    
     logger.info(f"Reconstructed logprobs shape: {reconstructed_logprobs.shape}")
     logger.info(
         f"Reconstructed entropy shape: {reconstructed_entropy.shape if reconstructed_entropy is not None else None}"
     )
-    return reconstructed_logprobs, reconstructed_entropy
+    if reconstructed_ref_logprobs is not None:
+        logger.info(f"Reconstructed ref_logprobs shape: {reconstructed_ref_logprobs.shape}")
+    
+    return reconstructed_logprobs, reconstructed_entropy, reconstructed_ref_logprobs

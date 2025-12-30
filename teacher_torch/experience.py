@@ -1,8 +1,11 @@
 from __future__ import annotations
+from torch._tensor import Tensor
+from torch._tensor import Tensor
 from typing import Optional, Self
 from dataclasses import dataclass, fields, field
 import torch
 from teacher_torch.sampling import SamplingOutput
+from teacher_torch.utils import zero_pad_sequences
 
 
 @dataclass
@@ -18,10 +21,11 @@ class Experience:
     completions: list[str]
     pad_token_id: int
 
-    sequence_ids: torch.IntTensor = field(default=None)  # (group_size, seq_len)
-    sequence_attention_mask: torch.IntTensor = field(default=None)  # (group_size, seq_len)
-    action_mask: torch.BoolTensor = field(default=None)  # (group_size, seq_len-1)
-    action_log_probs: torch.FloatTensor = field(default=None)  # (group_size, seq_len-1)
+    sequence_ids: torch.IntTensor  # (group_size, seq_len)
+    sequence_attention_mask: torch.IntTensor  # (group_size, seq_len)
+    action_mask: torch.BoolTensor # (group_size, seq_len-1)
+    action_log_probs: torch.FloatTensor  # (group_size, seq_len-1)
+    action_log_probs_ref: torch.FloatTensor = None  # (group_size, seq_len-1)
 
     rewards: Optional[torch.FloatTensor] = None  # (group_size, )
     solved_mask: Optional[torch.BoolTensor] = None  # (group_size, )
@@ -46,8 +50,6 @@ class Experience:
             members[f.name] = v
         return type(self)(**members)
 
-
-@dataclass
 class TeacherExperience(Experience):
     """
     Teacher experience that holds generated curricula.
@@ -60,7 +62,7 @@ class TeacherExperience(Experience):
     """
 
     curriculums: Optional[list[str]] = None  # Extracted curriculum (python programs) from completions
-    only_check_format: bool = False  # Whether this experience is only for format checking
+    only_check_format: bool = True  # Whether this experience is only for format checking
 
     @property
     def correct_formatted_experience(self) -> Optional["TeacherExperience"]:
@@ -109,56 +111,114 @@ class TeacherExperience(Experience):
         )
 
     def merge(self, other: "TeacherExperience") -> "TeacherExperience":
-        """Merge another TeacherExperience into this one.
+        """Merge another TeacherExperience into this one, keeping only unique completions.
         
-        Concatenates all lists and tensors. Assumes both experiences have the same
-        prompt and pad_token_id.
+        Concatenates lists and tensors, filtering out duplicate completions from the 
+        other experience. Handles variable sequence lengths by padding to max length.
+        Assumes both experiences have the same prompt and pad_token_id.
         
         Args:
             other: Another TeacherExperience to merge.
             
         Returns:
-            New TeacherExperience with merged data.
+            New TeacherExperience with merged data containing only unique completions.
         """
-        # Concatenate lists
-        merged_completions = self.completions + other.completions
+        # Track seen completions from self
+        seen_completions = set(self.completions)
+        unique_indices_other = []
+        
+        for idx, completion in enumerate(other.completions):
+            if completion not in seen_completions:
+                seen_completions.add(completion)
+                unique_indices_other.append(idx)
+        
+        # If no unique completions in other, return self unchanged
+        if not unique_indices_other:
+            return self
+        
+        # Concatenate lists with only unique completions from other
+        merged_completions = self.completions + [other.completions[i] for i in unique_indices_other]
+        
         merged_curriculums = None
         if self.curriculums is not None and other.curriculums is not None:
-            merged_curriculums = self.curriculums + other.curriculums
+            merged_curriculums = self.curriculums + [other.curriculums[i] for i in unique_indices_other]
         elif self.curriculums is not None:
             merged_curriculums = self.curriculums
         elif other.curriculums is not None:
-            merged_curriculums = other.curriculums
+            merged_curriculums = [other.curriculums[i] for i in unique_indices_other]
         
-        # Concatenate tensors
-        merged_sequence_ids = torch.cat([self.sequence_ids, other.sequence_ids], dim=0)
-        merged_attention_mask = torch.cat([self.sequence_attention_mask, other.sequence_attention_mask], dim=0)
-        merged_action_mask = torch.cat([self.action_mask, other.action_mask], dim=0)
-        merged_action_log_probs = torch.cat([self.action_log_probs, other.action_log_probs], dim=0)
+        # Helper to pad and concatenate 2D sequence tensors with potentially different lengths
+        def pad_and_concat_sequences(
+            self_tensor: torch.Tensor, 
+            other_tensor: torch.Tensor, 
+            pad_value: int
+        ) -> torch.Tensor:
+            """Pad sequences to same length and concatenate."""
+            self_seq_len = self_tensor.size(1)
+            other_seq_len = other_tensor.size(1)
+            
+            if self_seq_len == other_seq_len:
+                return torch.cat([self_tensor, other_tensor], dim=0)
+            
+            # Collect all sequences and pad them
+            all_sequences = list[Tensor](self_tensor) + list[Tensor](other_tensor)
+            return zero_pad_sequences(all_sequences, side="right", pad_value=pad_value)
         
+        # Get the unique samples from other
+        other_sequence_ids = other.sequence_ids[unique_indices_other]
+        other_attention_mask = other.sequence_attention_mask[unique_indices_other]
+        other_action_mask = other.action_mask[unique_indices_other]
+        other_action_log_probs = other.action_log_probs[unique_indices_other]
+        
+        # Concatenate tensors with padding for variable-length sequences
+        merged_sequence_ids = pad_and_concat_sequences(
+            self.sequence_ids, other_sequence_ids, pad_value=self.pad_token_id
+        )
+        merged_attention_mask = pad_and_concat_sequences(
+            self.sequence_attention_mask, other_attention_mask, pad_value=0
+        )
+        merged_action_mask = pad_and_concat_sequences(
+            self.action_mask, other_action_mask, pad_value=False
+        )
+        merged_action_log_probs = pad_and_concat_sequences(
+            self.action_log_probs, other_action_log_probs, pad_value=0
+        )
+        
+        merged_action_log_probs_ref = None
+        if self.action_log_probs_ref is not None and other.action_log_probs_ref is not None:
+            other_action_log_probs_ref = other.action_log_probs_ref[unique_indices_other]
+            merged_action_log_probs_ref = pad_and_concat_sequences(
+                self.action_log_probs_ref, other_action_log_probs_ref, pad_value=0
+            )
+        elif self.action_log_probs_ref is not None:
+            merged_action_log_probs_ref = self.action_log_probs_ref
+        elif other.action_log_probs_ref is not None:
+            merged_action_log_probs_ref = other.action_log_probs_ref[unique_indices_other]
+        
+        # 1D tensors (rewards, solved_mask, advantages) don't need padding
         merged_rewards = None
         if self.rewards is not None and other.rewards is not None:
-            merged_rewards = torch.cat([self.rewards, other.rewards], dim=0)
+            merged_rewards = torch.cat([self.rewards, other.rewards[unique_indices_other]]).reshape(-1)
         elif self.rewards is not None:
             merged_rewards = self.rewards
         elif other.rewards is not None:
-            merged_rewards = other.rewards
+            merged_rewards = other.rewards[unique_indices_other]
             
         merged_solved_mask = None
         if self.solved_mask is not None and other.solved_mask is not None:
-            merged_solved_mask = torch.cat([self.solved_mask, other.solved_mask], dim=0)
+            merged_solved_mask = torch.cat([self.solved_mask, other.solved_mask[unique_indices_other]]).reshape(-1)
         elif self.solved_mask is not None:
             merged_solved_mask = self.solved_mask
         elif other.solved_mask is not None:
-            merged_solved_mask = other.solved_mask
+            merged_solved_mask = other.solved_mask[unique_indices_other]
             
         merged_advantages = None
         if self.advantages is not None and other.advantages is not None:
-            merged_advantages = torch.cat([self.advantages, other.advantages], dim=0)
+            merged_advantages = torch.cat([self.advantages, other.advantages[unique_indices_other]]).reshape(-1)
         elif self.advantages is not None:
             merged_advantages = self.advantages
         elif other.advantages is not None:
-            merged_advantages = other.advantages
+            merged_advantages = other.advantages[unique_indices_other]
         
         return TeacherExperience(
             prompt=self.prompt,
@@ -169,6 +229,7 @@ class TeacherExperience(Experience):
             sequence_attention_mask=merged_attention_mask,
             action_mask=merged_action_mask,
             action_log_probs=merged_action_log_probs,
+            action_log_probs_ref=merged_action_log_probs_ref,
             rewards=merged_rewards,
             only_check_format=self.only_check_format,
             solved_mask=merged_solved_mask,
@@ -200,8 +261,7 @@ class TeacherExperience(Experience):
         # Build a mapping from source_curriculum to solved_rate
         curriculum_to_solved_rate = student_buffer.get_solved_rate_by_curriculum()
 
-        group_size = len(self.curriculums)
-        new_rewards = torch.zeros(group_size, dtype=torch.float32)
+        new_rewards = torch.zeros(len(self.curriculums))
 
         for i, curriculum in enumerate(self.curriculums):
             if curriculum in curriculum_to_solved_rate:
@@ -213,16 +273,13 @@ class TeacherExperience(Experience):
                 # If no matching student experience, reward is 0
                 new_rewards[i] = 0.0
 
+        # Reset
         self.rewards = new_rewards
+        self.only_check_format = False
 
         # Recompute advantages based on new rewards
-        if normalize_advantages and group_size > 1:
-            mean_reward = new_rewards.mean()
-            std_reward = new_rewards.std()
-            if std_reward > 1e-8:
-                self.advantages = (new_rewards - mean_reward) / std_reward
-            else:
-                self.advantages = new_rewards - mean_reward
+        if normalize_advantages and len(self.curriculums) > 1:
+            self.advantages = (new_rewards - new_rewards.mean()) / (new_rewards.std() + 1e-8)
         else:
             self.advantages = new_rewards - new_rewards.mean()
 
@@ -232,6 +289,7 @@ class TeacherExperience(Experience):
         sampling_output: "SamplingOutput",
         pad_token_id: int,
         action_log_probs: torch.FloatTensor,
+        action_log_probs_ref: Optional[torch.FloatTensor] = None,
         rewards: Optional[torch.FloatTensor] = None,
         advantages: Optional[torch.FloatTensor] = None,
         solved_mask: Optional[torch.BoolTensor] = None,
@@ -248,6 +306,7 @@ class TeacherExperience(Experience):
             sampling_output: The SamplingOutput containing generated sequences.
             pad_token_id: Token ID used for padding.
             action_log_probs: Log probabilities for each action, shape (group_size, seq_len-1).
+            action_log_probs_ref: Log probabilities for each action from the reference model, shape (group_size, seq_len-1).
             rewards: Scalar rewards for each sample, shape (group_size,).
             advantages: Group-normalized advantages, shape (group_size,).
             solved_mask: Solved mask for each sample, shape (group_size,).
@@ -264,7 +323,6 @@ class TeacherExperience(Experience):
                 f"TeacherExperience expects batch_size=1, got {batch_size}"
             )
 
-        group_size = sampling_output.group_size
         num_samples = sampling_output.num_samples
 
         # Validate tensor shapes
@@ -297,6 +355,7 @@ class TeacherExperience(Experience):
             sequence_attention_mask=sampling_output.sequence_attention_mask,
             action_mask=sampling_output.action_mask,
             action_log_probs=action_log_probs,
+            action_log_probs_ref=action_log_probs_ref,
             rewards=rewards,
             only_check_format=only_check_format,
             solved_mask=solved_mask,
@@ -304,8 +363,6 @@ class TeacherExperience(Experience):
             learnability=learnability_value,
         ).to(device="cpu")
 
-
-@dataclass
 class StudentExperience(Experience):
     """
     Student experience that tracks which curriculum it was seeded from.
@@ -314,7 +371,7 @@ class StudentExperience(Experience):
     that was used to generate this student's problem prompt.
     """
 
-    source_curriculum: Optional[str] = None  # The curriculum this student experience originated from
+    source_curriculum: str  # The curriculum this student experience originated from
 
     @property
     def solved_rate(self) -> float:
@@ -327,11 +384,10 @@ class StudentExperience(Experience):
             return 0.0
         return self.solved_mask.float().mean().item()
 
-
 @dataclass
 class StudentExperienceBuffer:
     """
-    A buffer of student experiences.
+    A buffer of experiences.
     Each instance represents a grouped rollout for a single curriculum/problem.
     """
 
@@ -404,6 +460,7 @@ class StudentExperienceBuffer:
         pad_token_id: int,
         action_log_probs: torch.FloatTensor,
         source_curriculums: list[str],
+        action_log_probs_ref: Optional[torch.FloatTensor] = None, # (num_samples, seq_len-1)
         rewards: Optional[torch.FloatTensor] = None,
         advantages: Optional[torch.FloatTensor] = None,
         solved_mask: Optional[torch.BoolTensor] = None,
@@ -418,6 +475,7 @@ class StudentExperienceBuffer:
             action_log_probs: Log probabilities for each action, shape (num_samples, seq_len-1).
             source_curriculums: List of curriculum strings that seeded each prompt.
                 Length should equal batch_size (number of unique prompts).
+            action_log_probs_ref: Log probabilities for each action from the reference model, shape (num_samples, seq_len-1).
             rewards: Scalar rewards for each sample, shape (num_samples,).
             advantages: Group-normalized advantages, shape (num_samples,).
             solved_mask: Solved mask for each sample, shape (num_samples,).
@@ -443,6 +501,12 @@ class StudentExperienceBuffer:
             raise ValueError(
                 f"action_log_probs.shape[0] ({action_log_probs.shape[0]}) must equal num_samples ({num_samples})"
             )
+
+        if action_log_probs_ref is not None:
+            if action_log_probs_ref.shape[0] != num_samples:
+                raise ValueError(
+                    f"action_log_probs_ref.shape[0] ({action_log_probs_ref.shape[0]}) must equal num_samples ({num_samples})"
+                )
 
         if rewards is not None:
             if rewards.shape[0] != num_samples:
@@ -477,6 +541,7 @@ class StudentExperienceBuffer:
             ]
             group_action_mask = sampling_output.action_mask[start_idx:end_idx]
             group_action_log_probs = action_log_probs[start_idx:end_idx]
+            group_action_log_probs_ref = action_log_probs_ref[start_idx:end_idx]
             group_completions = sampling_output.completions[start_idx:end_idx]
 
             if rewards is not None:
@@ -508,6 +573,7 @@ class StudentExperienceBuffer:
                 sequence_attention_mask=group_sequence_attention_mask,
                 action_mask=group_action_mask,
                 action_log_probs=group_action_log_probs,
+                action_log_probs_ref=group_action_log_probs_ref,
                 rewards=group_rewards,
                 solved_mask=group_solved_mask,
                 advantages=group_advantages,

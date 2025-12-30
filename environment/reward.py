@@ -95,10 +95,9 @@ class AnswerReward(Reward):
 
 def reward_curriculum(
     curriculum_generation: str,
+    format_regex: str,
     answer_group_rewards: Optional[list[AnswerReward]] = None,
     check_format_only: bool = False,
-    format_regex: str = ANSWER_FORMAT_REGEX,
-    use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
 ) -> CurriculumReward:
@@ -177,7 +176,7 @@ def reward_curriculum(
 
 # Partial version that only checks format (does not require answer_group_rewards)
 reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
-    reward_curriculum, check_format_only=True
+    reward_curriculum, format_regex=ANSWER_FORMAT_REGEX, check_format_only=True
 )
 
 
