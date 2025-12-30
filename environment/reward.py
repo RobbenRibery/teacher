@@ -10,7 +10,8 @@ from environment.execution import (
     execute_answer,
 )
 from environment.format import (
-    ANSWER_FORMAT_REGEX,
+    TEACHER_PATTERN,
+    STUDENT_PATTERN,
     extract_format,
 )
 
@@ -176,14 +177,14 @@ def reward_curriculum(
 
 # Partial version that only checks format (does not require answer_group_rewards)
 reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
-    reward_curriculum, format_regex=ANSWER_FORMAT_REGEX, check_format_only=True
+    reward_curriculum, format_regex=TEACHER_PATTERN, check_format_only=True
 )
 
 
 def reward_answer(
     extracted_curriculum: str,
     answer_generation: str,
-    format_regex: str = ANSWER_FORMAT_REGEX,
+    format_regex: str = STUDENT_PATTERN,
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
@@ -259,7 +260,7 @@ async def _reward_answer_async(
 async def reward_answer_group(
     extracted_curriculum: str,
     answer_generations: List[str],
-    format_regex: str = ANSWER_FORMAT_REGEX,
+    format_regex: str = STUDENT_PATTERN,
     use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,

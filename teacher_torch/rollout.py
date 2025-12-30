@@ -7,14 +7,14 @@ and package everything into Experience for training.
 
 from __future__ import annotations
 
-from typing import Callable, Any, Optional, Type, Union
+from typing import Callable, Optional, Type, Union
 from dataclasses import dataclass
-
+from pathlib import Path
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
 from environment.reward import Reward
 
-from teacher_torch.sampling import SamplingOutput, sample_responses_hf
+from teacher_torch.sampling import sample_responses_hf
 from teacher_torch.experience import TeacherExperience, StudentExperienceBuffer
 from teacher_torch.loss import compute_group_advantages, sequences_log_probs
 from teacher_torch.utils import setup_logger_with_file_line
@@ -25,15 +25,11 @@ logger = setup_logger_with_file_line(__name__)
 @dataclass
 class RolloutConfig:
     """Configuration for rollout behavior.
-
     Attributes:
-        group_size: Number of samples per prompt for group-relative advantages.
         seed: Random seed for reproducibility.
         normalize_advantages: Whether to normalize advantages (mean=0, std=1).
         use_rloo_baseline: Use RLOO baseline (leave-one-out) for variance reduction.
     """
-
-    group_size: int = 4
     seed: int = 42
     normalize_advantages: bool = True
     use_rloo_baseline: bool = False
@@ -76,13 +72,14 @@ def rollout(
     tokenizer: PreTrainedTokenizer,
     prompts: list[str],
     generation_config: GenerationConfig,
-    config: RolloutConfig,
+    rollout_config: RolloutConfig,
     role: str,
     solved_threshold: float = 1.0,
     logits_minibatch_size: int = 128,
     only_check_format: bool = False,
     source_curriculums: Optional[list[str]] = None,
     ref_model: Optional[PreTrainedModel] = None,
+    output_dir: Optional[Path] = None,
 ) -> tuple[Union[TeacherExperience, StudentExperienceBuffer], RolloutMetric]:
     """
     Perform a single rollout: sample responses and compute experiences.
@@ -101,7 +98,7 @@ def rollout(
         prompts: List of prompt strings.
         generation_config: HuggingFace generation config.
             Note: num_return_sequences should equal config.group_size.
-        config: RolloutConfig with hyperparameters.
+        rollout_config: RolloutConfig with hyperparameters.
         role: Either "teacher" or "student" for logging.
         solved_threshold: Threshold for considering a prompt group solved.
         reward_fn: Callable that takes completion string and returns Reward object.
@@ -110,6 +107,7 @@ def rollout(
         source_curriculums: For student role, list of curriculum strings that seeded
             each prompt. Required when role=="student" to create StudentExperienceBuffer.
         ref_model: The reference model to use for importance sampling.
+        output_dir: Directory to save the rollout output.
     Returns:
         Tuple of:
             - TeacherExperience or StudentExperienceBuffer: Container with all data
@@ -128,23 +126,19 @@ def rollout(
         ...     model, tokenizer, prompts=["Solve: 2+2="],
         ...     reward_fn=my_reward_fn,
         ...     generation_config=gen_config,
-        ...     config=RolloutConfig(group_size=4),
+        ...     rollout_config=RolloutConfig(),
         ...     role="student",
         ... )
     """
     if not reward_fn:
         raise ValueError("Reward function is required")
-    # Sanity check: generation config must match group_size
-    assert generation_config.num_return_sequences == config.group_size, (
-        f"generation_config.num_return_sequences ({generation_config.num_return_sequences}) "
-        f"must equal config.group_size ({config.group_size})"
-    )
     batch_size = len(prompts)  # -> number of unique questions/inputs
-    num_samples = batch_size * config.group_size  # -> total number of samples
+    group_size = generation_config.num_return_sequences
+    num_samples = batch_size * group_size  # -> total number of samples
 
     logger.info(f"# Unique Input Prompts: {batch_size}")
     logger.info(f"# Total Samples: {num_samples}")
-    logger.info(f"# Group Size: {config.group_size}")
+    logger.info(f"# Group Size: {group_size}")
     logger.info(f"# First Input Prompt:\n{prompts[0]}")
 
     # === Step 1: Sample responses ===
@@ -153,11 +147,15 @@ def rollout(
         tokenizer=tokenizer,
         prompts=prompts,
         generation_config=generation_config,
-        seed=config.seed,
+        seed=rollout_config.seed,
     )
-    logger.info(
-        f"\033[34mFirst sampling output:\n======\n{sampling_output.completions[0]}\033[0m"
-    )
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for i, completion in enumerate(sampling_output.completions):
+            with open(output_dir / f"completion_{i}.txt", "w") as f:
+                f.write(completion)
+            logger.info(f"Saved completion {i} to {output_dir / f'completion_{i}.txt'}")
+
     logger.info(f"Sampling Statistics:\n======\n{str(sampling_output)}")
 
     # === Step 2: Compute old log probs (behavior policy) ===
@@ -195,14 +193,14 @@ def rollout(
         # Compute advantages
         # advantages: (num_samples,)
         advantages = compute_group_advantages(
-            returns=rewards.view(batch_size, config.group_size),
-            normalize=config.normalize_advantages,
-            use_rloo_scalar=config.use_rloo_baseline,
+            returns=rewards.view(batch_size, group_size),
+            normalize=rollout_config.normalize_advantages,
+            use_rloo_scalar=rollout_config.use_rloo_baseline,
         )
         # Compute solved rate
         solved_mask = (rewards >= solved_threshold).bool()  # (num_samples,)
         solved_grouped = solved_mask.view(
-            batch_size, config.group_size
+            batch_size, group_size
         )  # (batch_size, group_size)
         solved_mean_per_group = solved_grouped.mean(dim=1)  # (batch_size,)
 
@@ -219,7 +217,7 @@ def rollout(
     # === Collect metrics ===
     metrics = RolloutMetric(
         num_samples=num_samples,
-        group_size=config.group_size,
+        group_size=group_size,
         mean_entropy=entropy.mean().item() if entropy is not None else 0.0,
         mean_completion_len=sampling_output.action_mask.sum(dim=1)
         .float()

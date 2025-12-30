@@ -48,12 +48,12 @@ class BooleanConstraintsSatisfaction(Task):
     format: str = dedent(
         """
     ### Guideline
-    - Put your final designed problem inside the <answer> tag and don't include solutions or hints.
-    - Your response MUST include exactly one <answer>...</answer> block.
-    - Any <think>...</think> content should appear BEFORE <answer>.
-    - Do not include any text after </answer>.
+    - Don't include solutions or hints in your response.
+    - Include exactly ONE <answer>...</answer> block.
+    - Stop immediately after the closing </answer> tag.
+    - Add "# Reason step by step and derive a solution of x." inside the python code block.
 
-    ### Example
+    ### Answer Example
     <answer>
     ```python
     # Reason step by step and derive a solution of x.

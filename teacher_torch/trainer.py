@@ -43,6 +43,7 @@ from curriculum.prompt_template import TeacherPrompt, StudentPrompt
 from curriculum.tasks import BooleanConstraintsSatisfaction
 
 import wandb
+from pathlib import Path
 logger = setup_logger_with_file_line(__name__)
 
 @dataclass
@@ -146,7 +147,6 @@ class GRPOTrainer:
             train_config: Training configuration object.
         """
         self.train_config = train_config
-        self.seed = train_config.seed
 
         # Load or use provided model/tokenizer
         self.model, self.tokenizer = load_model_tokenizer(
@@ -155,7 +155,10 @@ class GRPOTrainer:
         )
 
         # Create frozen reference model for KL regularization
-        self.ref_model = copy.deepcopy(self.model)
+        self.ref_model, _ = load_model_tokenizer(
+            train_config.mode_name_or_path,
+            device_map="auto" if torch.cuda.is_available() else None,
+        )
         for param in self.ref_model.parameters():
             param.requires_grad = False
         self.ref_model.eval()
@@ -171,12 +174,9 @@ class GRPOTrainer:
         self.teacher_prompt_template = TeacherPrompt()
         self.student_prompt_template = StudentPrompt()
 
-        # Regex for extracting Python code from generations
-        self.format_regex = ANSWER_FORMAT_REGEX
-
         # generation config
-        self.teacher_generation_config = GenerationConfig(**asdict(train_config.teacher_generation_config))
-        self.student_generation_config = GenerationConfig(**asdict(train_config.student_generation_config))
+        self.teacher_generation_config = train_config.teacher_generation_config
+        self.student_generation_config = train_config.student_generation_config
 
     def _build_teacher_prompt(self) -> str:
         """Build formatted teacher prompt from seed task.
@@ -218,6 +218,7 @@ class GRPOTrainer:
     def rollout_teacher(
         self,
         teacher_reward_fn: Callable[[str], CurriculumReward],
+        output_dir: Optional[Path] = None,  
     ) -> tuple[TeacherExperience, RolloutMetric]:
         """Execute teacher rollout phase.
 
@@ -227,11 +228,7 @@ class GRPOTrainer:
 
         Args:
             teacher_reward_fn: Callable that takes completion string and returns Reward object.
-            min_legit_problems: Minimum number of correctly formatted curricula to collect.
-                If 0, returns the first rollout without filtering.
-            max_trial_attempts: Maximum number of rollout attempts when collecting
-                correctly formatted curricula.
-
+            output_dir: Directory to save the rollout output.
         Returns:
             Tuple containing:
                 - experience: TeacherExperience with generated curricula.
@@ -239,74 +236,50 @@ class GRPOTrainer:
         """
         if not teacher_reward_fn:
             raise ValueError("Teacher reward function is required")
-        # Build teacher prompts (single prompt)
-        prompts = [self._build_teacher_prompt()]
 
-        # Create rollout config
+        prompts = [self._build_teacher_prompt()]
         rollout_config = RolloutConfig(
-            group_size=self.train_config.teacher_group_size,
-            seed=self.seed,
+            seed=self.teacher_generation_config.seed,
             normalize_advantages=self.train_config.normalize_advantages,
         )
 
-        # If we don't need to filter for correct formats, just do one rollout
-        if self.train_config.minimal_legit_curriculum_per_iteration <= 0:
+        def do_rollout() -> tuple[TeacherExperience, RolloutMetric]:
             return rollout(
                 model=self.model,
                 tokenizer=self.tokenizer,
                 prompts=prompts,
-                generation_config=self.teacher_generation_config,
-                config=rollout_config,
+                generation_config=GenerationConfig(**self.teacher_generation_config.to_dict()),
+                rollout_config=rollout_config,
                 role="teacher",
                 solved_threshold=self.train_config.solved_threshold,
                 reward_fn=teacher_reward_fn,
                 logits_minibatch_size=self.train_config.logits_minibatch_size,
                 only_check_format=True,
                 ref_model=self.ref_model,
+                output_dir=output_dir,
             )
-        
-        # Otherwise, accumulate correctly formatted curricula
-        curated_experience: Optional[TeacherExperience] = None
-        attempts = 0
-        metrics = None
-        
-        while (
-               curated_experience is None or 
-               len(curated_experience.curriculums or []) < self.train_config.minimal_legit_curriculum_per_iteration
-            ) and (
-                attempts < self.train_config.max_trail_attempts_per_iteration
-            ):
-            # Rollout
-            experience, metrics = rollout(
-                model=self.model,
-                tokenizer=self.tokenizer,
-                prompts=prompts,
-                generation_config=self.teacher_generation_config,
-                config=rollout_config,
-                role="teacher",
-                solved_threshold=self.train_config.solved_threshold,
-                reward_fn=teacher_reward_fn,
-                logits_minibatch_size=self.train_config.logits_minibatch_size,
-                only_check_format=True,  # Must check format when filtering
-                ref_model=self.ref_model,
-            )
-            
-            # Get correctly formatted experience
-            correctly_formatted = experience.correct_formatted_experience
-            if correctly_formatted is not None:
-                if curated_experience is None:
-                    curated_experience = correctly_formatted
-                else:
-                    curated_experience = curated_experience.merge(correctly_formatted)
-            
-            attempts += 1
-        
-        # Return what we've accumulated (or empty experience if nothing worked)
-        if curated_experience is None:
-            # Return the last failed experience
-            return experience, metrics
-        
-        return curated_experience, metrics
+
+        min_legit = self.train_config.minimal_legit_curriculum_per_iteration
+        max_attempts = self.train_config.max_trail_attempts_per_iteration
+
+        # Single rollout if no filtering needed
+        if min_legit <= 0:
+            return do_rollout()
+
+        # Accumulate correctly formatted curricula
+        curated: Optional[TeacherExperience] = None
+        experience, metrics = None, None
+
+        for _ in range(max_attempts):
+            experience, metrics = do_rollout()
+
+            if (formatted := experience.correct_formatted_experience) is not None:
+                curated = formatted if curated is None else curated.merge(formatted)
+
+                if len(curated.curriculums or []) >= min_legit:
+                    break
+
+        return curated or experience, metrics
 
     def rollout_student(
         self,
@@ -334,8 +307,7 @@ class GRPOTrainer:
 
         # Create rollout config
         rollout_config = RolloutConfig(
-            group_size=self.train_config.student_group_size,
-            seed=self.seed,
+            seed=self.student_generation_config.seed,
             normalize_advantages=self.train_config.normalize_advantages,
         )
 
@@ -344,8 +316,8 @@ class GRPOTrainer:
             model=self.model,
             tokenizer=self.tokenizer,
             prompts=formatted_prompts,
-            generation_config=self.student_generation_config,
-            config=rollout_config,
+            generation_config=GenerationConfig(**self.student_generation_config.to_dict()),
+            rollout_config=rollout_config,
             role="student",
             solved_threshold=self.train_config.solved_threshold,
             reward_fn=student_reward_fn,

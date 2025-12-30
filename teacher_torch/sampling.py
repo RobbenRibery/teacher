@@ -7,11 +7,12 @@ from transformers import (
     PreTrainedTokenizer,
     GenerationConfig,
     set_seed,
+    StoppingCriteria,
+    StoppingCriteriaList,
 )
 from teacher_torch.utils import setup_logger_with_file_line
 
 logger = setup_logger_with_file_line(__name__)
-
 
 @dataclass
 class SamplingOutput:
@@ -110,19 +111,27 @@ def sample_responses_hf(
     batch_inputs: dict[str, torch.IntTensor] = tokenizer(
         prompts,
         return_tensors="pt",
-        padding="longest",
+        padding=True,
         truncation=True,
         return_attention_mask=True,
         padding_side="left",
     )
     pad_token_id = tokenizer.pad_token_id
+    prompt_len = batch_inputs["input_ids"].shape[1]
 
     logger.info(f"Generation config:\n======\n{generation_config.to_dict()}\n======\n")
+    
+    # Remove stop_strings from generation_config dict since we handle it manually
+    # and some models/versions might complain or double-handle it
+    gen_kwargs = generation_config.to_dict()
+    if "stop_strings" in gen_kwargs:
+        del gen_kwargs["stop_strings"]
+
     sequence_ids: torch.IntTensor = model.generate(
         input_ids=batch_inputs["input_ids"].to(model.device),
         attention_mask=batch_inputs["attention_mask"].to(model.device),
         tokenizer=tokenizer,
-        **generation_config.to_dict(),
+        **gen_kwargs,
     )
 
     action_mask: torch.BoolTensor = torch.zeros_like(

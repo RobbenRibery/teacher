@@ -11,32 +11,33 @@ from teacher_torch.configs import (
     StudentGenerationConfig,
 )
 
-
 def _default_teacher_gen_config(seed: int = 42) -> TeacherGenerationConfig:
     """Create default teacher generation config."""
     return TeacherGenerationConfig(
-        teacher_group_size=8,
-        max_new_tokens=8192,
-        temperature=0.6,
-        top_k=20,
+        max_new_tokens=4096,
+        temperature=0.7,
+        top_k=50,
         top_p=0.95,
         min_p=0.0,
-        repetition_penalty=1.0,
+        repetition_penalty=1.25,
         seed=seed,
+        do_sample=True,
+        teacher_group_size=8,
+        stop_strings=["</answer>", "\n</answer>", "</answer>\n", "<tool_call>"],
     )
 
 
 def _default_student_gen_config(seed: int = 42) -> StudentGenerationConfig:
     """Create default student generation config."""
     return StudentGenerationConfig(
-        student_group_size=16,
         max_new_tokens=4096,
-        temperature=0.6,
+        temperature=0.8,
         top_k=20,
         top_p=0.95,
         min_p=0.0,
         repetition_penalty=1.0,
         seed=seed,
+        student_group_size=16,
     )
 
 
@@ -46,6 +47,8 @@ def _default_config() -> GRPOTrainingConfig:
         mode_name_or_path="Qwen/Qwen3-1.7B",
         teacher_generation_config=_default_teacher_gen_config(),
         student_generation_config=_default_student_gen_config(),
+        minimal_legit_curriculum_per_iteration=32,
+        max_trail_attempts_per_iteration=10,
     )
 
 
@@ -54,26 +57,11 @@ class ConfigArgs:
     """Command-line arguments wrapper for GRPO training configuration.
     
     Uses tyro's nested config support to parse GRPOTrainingConfig directly.
-    Adds seed at the top level since trainer accesses train_config.seed.
     """
-    
-    # Seed for reproducibility (accessed by trainer)
-    seed: int = 42
-    
-    # Nested GRPO training config (tyro handles nested parsing automatically)
-    # Using field(default_factory) to create default nested configs
     config: GRPOTrainingConfig = field(default_factory=_default_config)
-    
-    def __post_init__(self):
-        """Ensure seed is synchronized across config."""
-        # Update seed in generation configs
-        self.config.teacher_generation_config.seed = self.seed
-        self.config.student_generation_config.seed = self.seed
-        # Add seed to config for trainer access
-        self.config.seed = self.seed
 
 
-def parse_args() -> tuple[GRPOTrainingConfig, int]:
+def parse_args() -> GRPOTrainingConfig:
     """Parse command-line arguments and return GRPOTrainingConfig and seed.
     
     Uses tyro's nested config support to parse GRPOTrainingConfig directly.
@@ -82,5 +70,5 @@ def parse_args() -> tuple[GRPOTrainingConfig, int]:
         Tuple of (GRPOTrainingConfig instance, seed value).
     """
     args = tyro.cli(ConfigArgs)
-    return args.config, args.seed
+    return args.config
 

@@ -1,16 +1,18 @@
 from __future__ import annotations
+from typing import Any, Optional
 from dataclasses import dataclass
 
 @dataclass 
 class GenerationConfig:
     """Configuration for generation."""
     max_new_tokens: int = 512
-    temperature: float = 0.6
+    temperature: float = 0.8
     top_k: int = 20
     top_p: float = 0.95
     min_p: float = 0.0
-    repetition_penalty: float = 1
+    repetition_penalty: float = 1.1
     seed: int = 256
+    do_sample: bool = True
 
     def reset_seed(self) -> None:
         """Split the seed into a new seed (mimics jax.random.split).
@@ -27,26 +29,58 @@ class GenerationConfig:
         
         # Update internal seed
         self.seed = new_seed
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert generation config to dictionary."""
+        return {
+            "max_new_tokens": self.max_new_tokens,
+            "temperature": self.temperature,
+            "top_k": self.top_k,
+            "top_p": self.top_p,
+            "min_p": self.min_p,
+            "repetition_penalty": self.repetition_penalty,
+            "do_sample": self.do_sample,
+        }
     
+@dataclass
 class TeacherGenerationConfig(GenerationConfig):
     """Configuration for GRPO generation."""
     teacher_group_size: int = 4 
     max_new_tokens: int = 8192
+    stop_strings: Optional[list[str]] = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert teacher generation config to dictionary."""
+        org = super().to_dict()
+        org["num_return_sequences"] = self.teacher_group_size
+        if self.stop_strings is not None:
+            org["stop_strings"] = self.stop_strings
+        return org
+
+@dataclass
 class StudentGenerationConfig(GenerationConfig):
     """Configuration for GRPO generation."""
     student_group_size: int = 16
     max_new_tokens: int = 4096
+    stop_strings: Optional[list[str]] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert student generation config to dictionary."""
+        org = super().to_dict()
+        org["num_return_sequences"] = self.student_group_size
+        if self.stop_strings is not None:
+            org["stop_strings"] = self.stop_strings
+        return org
 
 @dataclass 
 class TrainingConfig:
     """Configuration for training."""
-    # model name or path
-    mode_name_or_path: str = "Qwen/Qwen3-1.7B"
-    
-    # generation configuration
+    # generation configuration (must come first - no defaults)
     teacher_generation_config: TeacherGenerationConfig 
     student_generation_config: StudentGenerationConfig 
+    
+    # model name or path
+    mode_name_or_path: str = "Qwen/Qwen3-1.7B"
     minimal_legit_curriculum_per_iteration: int = 8
     max_trail_attempts_per_iteration: int = 10
 
@@ -67,6 +101,7 @@ class TrainingConfig:
     
     num_training_steps: int = 100
 
+@dataclass
 class GRPOTrainingConfig(TrainingConfig):
     """Configuration for GRPO training.
 
