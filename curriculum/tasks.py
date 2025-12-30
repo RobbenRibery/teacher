@@ -48,13 +48,12 @@ class BooleanConstraintsSatisfaction(Task):
     format: str = dedent(
         """
     ### Guideline
-    - Don't include solutions or hints in your response.
-    - Include exactly ONE <answer>...</answer> block.
-    - Stop immediately after the closing </answer> tag.
-    - Add "# Reason step by step and derive a solution of x." inside the python code block.
+    - Put your final designed problem inside the ```python\n...\n``` block and don't include solutions or hints.
+    - Your response MUST include exactly 1 ```python\n...\n``` block.
+    - Add "# Reason step by step and derive a solution of x" inside the python code block.
+    - Do not include any text after ```python\n...\n``` block.
 
-    ### Answer Example
-    <answer>
+    ### Example response
     ```python
     # Reason step by step and derive a solution of x.
     constraints = [
@@ -63,7 +62,6 @@ class BooleanConstraintsSatisfaction(Task):
         ...,
     ]
     ```
-    </answer>
     """
     ).strip()
 

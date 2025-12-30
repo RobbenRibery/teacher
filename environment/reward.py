@@ -191,6 +191,9 @@ def reward_answer(
 ) -> AnswerReward:
     """
     Reward the answer based on the curriculum.
+    
+    For student answers in \\boxed{} format, the extracted value is evaluated
+    directly as a Python expression (e.g., "26" -> 26, "-5" -> -5, "3.14" -> 3.14).
     """
     # check the format
     extracted_answer = extract_format(
@@ -202,25 +205,25 @@ def reward_answer(
             answer_generation=answer_generation,
             extracted_answer=extracted_answer,
             reward=0.0,
-            error=f"No answer satisfying the format {format_regex} extracted from the answer generation.",
-            feedback=f"Please ensure the answer satisfies the format {format_regex}.",
+            error=f"No answer satisfying the format extracted from the answer generation.",
+            feedback=f"Please ensure the answer is in the correct format (e.g., \\boxed{{value}}).",
         )
 
-    # execute the answer
-    execution_result = execute_answer(
-        extracted_answer=extracted_answer, variable_name=variable_name
-    )
-    if execution_result.value is None:
+    # For \boxed{} format, evaluate the extracted value directly
+    # The extracted_answer is just the value inside \boxed{}, e.g., "26"
+    try:
+        answer_value = eval(extracted_answer)
+    except Exception as e:
         return AnswerReward(
             answer_generation=answer_generation,
             extracted_answer=extracted_answer,
             reward=0.0,
-            error=execution_result.error,
-            feedback=f"The answer satisfies the format, however the python code is not runnable.",
+            error=f"Could not evaluate answer '{extracted_answer}': {e}",
+            feedback=f"The answer must be a valid numeric expression.",
         )
 
     verification_result = verify(
-        code=extracted_curriculum, variable_assignment=execution_result.value
+        code=extracted_curriculum, variable_assignment=answer_value
     )
     if verification_result.error is not None:
         return AnswerReward(
@@ -228,7 +231,7 @@ def reward_answer(
             extracted_answer=extracted_answer,
             reward=0.0,
             error=verification_result.error,
-            feedback=f"The answer satisfies the format, however the python code is not correct.",
+            feedback=f"The answer format is correct, but verification failed.",
         )
 
     return AnswerReward(

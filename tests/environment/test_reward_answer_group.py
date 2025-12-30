@@ -55,15 +55,19 @@ def _extract_curriculum_from_valid() -> str:
     return match.group(1)
 
 
-def _make_answer_generation(code: str) -> str:
-    return f"<think>t</think><answer>\n```python\n{code}\n```</answer>"
+def _make_answer_generation(value: str) -> str:
+    """Create a student answer in the \\boxed{} format."""
+    return f"<think>Let me solve this...</think>\nThe answer is \\boxed{{{value}}}"
 
 
 def test_reward_answer_group_mixed_results():
     curriculum_code = _extract_curriculum_from_valid()
-    valid_answer = _make_answer_generation("x = 26")
-    invalid_format_answer = _read_fixture(INVALID_PATH)
-    verification_fail_answer = _make_answer_generation("x = 4")
+    # x = 26 satisfies: even, (26+1)%3==0, (26-1)%5==0
+    valid_answer = _make_answer_generation("26")
+    # Invalid format - no \boxed{}
+    invalid_format_answer = "<think>thinking</think>\nx = 26"
+    # x = 4 does NOT satisfy the constraints
+    verification_fail_answer = _make_answer_generation("4")
 
     answers = [valid_answer, invalid_format_answer, verification_fail_answer]
 
@@ -86,4 +90,4 @@ def test_reward_answer_group_mixed_results():
 
     assert results[2].passed is False
     assert results[2].reward == 0.0
-    assert results[2].error is None
+    assert results[2].error is None  # No execution error, just wrong answer

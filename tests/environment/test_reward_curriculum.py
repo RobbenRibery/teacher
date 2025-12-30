@@ -7,7 +7,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from environment.reward import reward_curriculum
-from environment.format import ANSWER_FORMAT_REGEX
+from environment.format import TEACHER_PATTERN
 
 
 FIXTURES_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -24,13 +24,13 @@ def test_reward_curriculum_valid_format_only():
 
     result = reward_curriculum(
         curriculum_generation=curriculum_generation,
-        format_regex=ANSWER_FORMAT_REGEX,
+        format_regex=TEACHER_PATTERN,
         check_format_only=True,
     )
 
     assert result.passed is True
     assert result.extracted_curriculum is not None
-    expected_curriculum = """# Write Python code to derive a particular value of "x" which meets all constraints imposed:
+    expected_curriculum = """# Reason step by step and derive a solution of x.
 constraints = [
     lambda x: x % 2 == 0,
     lambda x: (x + 1) % 3 == 0,
@@ -47,7 +47,7 @@ def test_reward_curriculum_invalid_format():
 
     result = reward_curriculum(
         curriculum_generation=curriculum_generation,
-        format_regex=ANSWER_FORMAT_REGEX,
+        format_regex=TEACHER_PATTERN,
         check_format_only=True,
     )
 

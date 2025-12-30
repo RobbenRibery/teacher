@@ -11,6 +11,7 @@ from teacher_torch.trainer import GRPOTrainer
 from teacher_torch.utils import configure_torch_for_training
 from environment.reward import reward_curriculum_format_only
 import rich 
+import json
 
 def main() -> None:
     """Run teacher rollout with config from CLI and log to wandb."""
@@ -24,10 +25,11 @@ def main() -> None:
     config_dict = asdict(config)
     
     # Initialize wandb with config
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     wandb.init(
         project="teacher-rollout",
         config=config_dict,
-        name = datetime.now().strftime("%Y%m%d_%H%M%S"),
+        name = timestamp,
         tags = ["teacher_rollout"],
     )
     
@@ -39,8 +41,12 @@ def main() -> None:
     
     # Create trainer
     trainer = GRPOTrainer(config)
-    output_dir = Path("data/teacher")
+    output_dir = Path("data/teacher") / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(output_dir / "config.json", "w") as f:
+        json.dump(config_dict, f, indent=4)
+    rich.print(f"Config saved to {output_dir / 'config.json'}")
     
     # Run teacher rollout
     rich.print("Running teacher rollout...")

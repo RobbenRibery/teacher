@@ -23,7 +23,6 @@ def _default_teacher_gen_config(seed: int = 42) -> TeacherGenerationConfig:
         seed=seed,
         do_sample=True,
         teacher_group_size=8,
-        stop_strings=["</answer>", "\n</answer>", "</answer>\n", "<tool_call>"],
     )
 
 

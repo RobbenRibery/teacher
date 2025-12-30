@@ -1,18 +1,62 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 import torch
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer,
     GenerationConfig,
     set_seed,
-    StoppingCriteria,
-    StoppingCriteriaList,
 )
 from teacher_torch.utils import setup_logger_with_file_line
 
 logger = setup_logger_with_file_line(__name__)
+
+
+def get_eos_token_ids(
+    tokenizer: PreTrainedTokenizer,
+    extra_stop_strings: Optional[list[str]] = None,
+) -> list[int]:
+    """Get list of EOS token IDs including tokenized stop strings.
+    
+    Args:
+        tokenizer: The tokenizer to use for encoding stop strings.
+        extra_stop_strings: Optional list of strings that should also trigger EOS.
+            These strings will be tokenized and their token IDs added to the EOS list.
+    
+    Returns:
+        List of token IDs that should trigger end of generation.
+    """
+    eos_ids: list[int] = []
+    
+    # Add default EOS token(s)
+    if tokenizer.eos_token_id is not None:
+        if isinstance(tokenizer.eos_token_id, list):
+            eos_ids.extend(tokenizer.eos_token_id)
+        else:
+            eos_ids.append(tokenizer.eos_token_id)
+    
+    # Add tokenized stop strings
+    if extra_stop_strings:
+        for stop_str in extra_stop_strings:
+            # Tokenize without special tokens to get just the string's tokens
+            token_ids = tokenizer.encode(stop_str, add_special_tokens=False)
+            if token_ids:
+                # Use the last token as the stopping token (handles multi-token strings)
+                # This ensures we stop when we've generated the complete stop string
+                eos_ids.append(token_ids[-1])
+                logger.info(f"Added stop string '{stop_str}' -> token ID {token_ids[-1]} (full: {[tokenizer.decode(token_id) for token_id in token_ids]})")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_eos_ids = []
+    for tid in eos_ids:
+        if tid not in seen:
+            seen.add(tid)
+            unique_eos_ids.append(tid)
+    
+    return unique_eos_ids
 
 @dataclass
 class SamplingOutput:
@@ -121,16 +165,19 @@ def sample_responses_hf(
 
     logger.info(f"Generation config:\n======\n{generation_config.to_dict()}\n======\n")
     
-    # Remove stop_strings from generation_config dict since we handle it manually
-    # and some models/versions might complain or double-handle it
+    # Extract stop_strings and convert to eos_token_ids
     gen_kwargs = generation_config.to_dict()
-    if "stop_strings" in gen_kwargs:
-        del gen_kwargs["stop_strings"]
+    stop_strings = gen_kwargs.pop("stop_strings", None)
+    
+    # Build eos_token_ids list with any extra stop strings
+    eos_token_ids = get_eos_token_ids(tokenizer, stop_strings)
+    if eos_token_ids:
+        gen_kwargs["eos_token_id"] = eos_token_ids
+        logger.info(f"Using eos_token_ids: {eos_token_ids}")
 
     sequence_ids: torch.IntTensor = model.generate(
         input_ids=batch_inputs["input_ids"].to(model.device),
         attention_mask=batch_inputs["attention_mask"].to(model.device),
-        tokenizer=tokenizer,
         **gen_kwargs,
     )
 

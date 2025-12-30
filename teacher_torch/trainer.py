@@ -152,12 +152,14 @@ class GRPOTrainer:
         self.model, self.tokenizer = load_model_tokenizer(
             train_config.mode_name_or_path,
             device_map="auto" if torch.cuda.is_available() else None,
+            #chat_template_path="template_lm_studio.jinja",
         )
 
         # Create frozen reference model for KL regularization
         self.ref_model, _ = load_model_tokenizer(
             train_config.mode_name_or_path,
             device_map="auto" if torch.cuda.is_available() else None,
+            #chat_template_path="template_lm_studio.jinja",
         )
         for param in self.ref_model.parameters():
             param.requires_grad = False

@@ -1,5 +1,6 @@
 import gc
 import logging
+from pathlib import Path
 from typing import Optional, List, Any
 from transformers import (
     AutoTokenizer,
@@ -154,6 +155,7 @@ def load_model_tokenizer(
     device_map: Optional[str] = "auto",
     freeze_model: bool = False,
     checkpoint_path: Optional[str] = None,
+    chat_template_path: Optional[str] = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
     Loads a pre-trained model and its tokenizer.
@@ -163,6 +165,9 @@ def load_model_tokenizer(
         trust_remote_code (bool): Whether to trust remote code.
         bf16 (bool): Whether to use bfloat16 precision.
         device_map (str): The device map to use for the model.
+        freeze_model (bool): Whether to freeze model parameters.
+        checkpoint_path (str, optional): Path to checkpoint to load instead of model_name_or_path.
+        chat_template_path (str, optional): Path to custom Jinja chat template file.
 
     Returns:
         tuple: A tuple containing the model and its tokenizer.
@@ -189,6 +194,20 @@ def load_model_tokenizer(
         logger.info(f"Adjusting padding side from right to left for training")
         # training padding should be on the left
         tokenizer.padding_side = "left"
+
+    # Load custom chat template if provided
+    if chat_template_path:
+        template_path = Path(chat_template_path)
+        # If relative path doesn't exist, try resolving from current working directory
+        if not template_path.exists() and not template_path.is_absolute():
+            template_path = Path.cwd() / template_path
+        if template_path.exists():
+            with open(template_path, "r") as f:
+                custom_template = f.read()
+            tokenizer.chat_template = custom_template
+            logger.info(f"Loaded custom chat template from {template_path}")
+        else:
+            logger.warning(f"Chat template file not found: {chat_template_path}")
 
     logger.info(f"Special Token IDs: {tokenizer.special_tokens_map}")
 

@@ -10,8 +10,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from environment.execution import verify, execute_answer, time_limit, TimeoutException
-from environment.format import extract_format as extract_answer
-from environment.format import BASE_PATTERN
+from environment.format import extract_format as extract_answer, CODE_BLOCK_REGEX
 
 
 def test_verify_success_simple():

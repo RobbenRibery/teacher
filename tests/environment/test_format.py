@@ -7,97 +7,150 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from environment.format import BASE_PATTERN, extract_format
+from environment.format import TEACHER_PATTERN, STUDENT_PATTERN, extract_format
+
+
+# =============================================================================
+# Teacher Pattern Tests (```python block after thinking, must end with \n```)
+# =============================================================================
 
 @pytest.mark.parametrize("text, expected_code", [
-    # Positive case: standard format (no trailing newline after closing fence)
+    # Positive case: standard teacher format
     ("""<think>
 some thoughts
 </think>
-<answer>
 ```python
 x = 1
-```</answer>""", """x = 1"""),
-    
-    # Positive case: with preamble only (no postamble allowed after closing fence)
-    ("""<think>t</think><answer>preamble
-```python
-print('hi')
-```</answer>""", """print('hi')"""),
-    
-    # Positive case: with comment inside python block
-    ("""<think>t</think><answer>```python
-# This is a comment
-x = 1
-```</answer>""", """# This is a comment
-x = 1"""),
+```""", """x = 1"""),
     
     # Positive case: minimal whitespace
-    ("""<think></think><answer>```python
+    ("""<think></think>
+```python
 x=1
-```</answer>""", """x=1"""),
+```""", """x=1"""),
     
-    # Positive case: multiline code with no trailing content
-    ("""<think>t</think><answer>
-# this a python code block
+    # Positive case: multiline code
+    ("""<think>thinking here</think>
 ```python
 x = 1
 y = 2
 z = x + y
-```</answer>""", """x = 1
+```""", """x = 1
 y = 2
 z = x + y"""),
+    
+    # Positive case: with comment inside python block
+    ("""<think>t</think>
+```python
+# This is a comment
+x = 1
+```""", """# This is a comment
+x = 1"""),
 ])
-def test_base_pattern_positive(text, expected_code):
-    result = extract_format(text, BASE_PATTERN)
+def test_teacher_pattern_positive(text, expected_code):
+    result = extract_format(text, TEACHER_PATTERN)
     assert result == expected_code
+
 
 @pytest.mark.parametrize("text", [
     # Negative case: missing <think>
-    """<answer>```python
+    """```python
 x = 1
-```</answer>""",
+```""",
     
     # Negative case: <think> not at start
     """some text
-<think>t</think><answer>```python
+<think>t</think>
+```python
 x = 1
-```</answer>""",
+```""",
     
-    # Negative case: </answer> not at end
-    """<think>t</think><answer>```python
+    # Negative case: text after closing fence
+    """<think>t</think>
+```python
 x = 1
-```</answer>
-some text""",
+```
+some text after""",
     
-    # Negative case: nested <answer>
-    """<think>t</think><answer><answer>```python
+    # Negative case: trailing whitespace after closing fence (not allowed)
+    """<think>t</think>
+```python
 x = 1
-```</answer></answer>""",
-    
-    # Negative case: multiple answer blocks
-    """<think>t</think><answer>```python
-x = 1
-```</answer><answer>```python
-x = 2
-```</answer>""",
+```   """,
     
     # Negative case: missing python code block
-    """<think>t</think><answer>x = 1</answer>""",
+    """<think>t</think>
+x = 1""",
     
-    # Negative case: postamble after closing fence (new pattern disallows this)
+    # Negative case: uses <answer> tags (old format)
     """<think>t</think><answer>```python
 x = 1
-```
-postamble</answer>""",
+```</answer>""",
     
-    # Negative case: newline after closing fence
-    """<think>t</think><answer>```python
-x = 1
-```
-</answer>""",
+    # Negative case: code block not closed
+    """<think>t</think>
+```python
+x = 1""",
 ])
-def test_base_pattern_negative(text):
-    result = extract_format(text, BASE_PATTERN)
+def test_teacher_pattern_negative(text):
+    result = extract_format(text, TEACHER_PATTERN)
     assert result is None
 
+
+# =============================================================================
+# Student Pattern Tests (\boxed{} at end after thinking)
+# =============================================================================
+
+@pytest.mark.parametrize("text, expected_answer", [
+    # Positive case: standard student format
+    (r"""<think>
+Let me solve this step by step.
+x must be even and greater than 5.
+So x = 8.
+</think>
+The answer is \boxed{8}""", "8"),
+    
+    # Positive case: minimal
+    (r"<think>t</think>\boxed{42}", "42"),
+    
+    # Positive case: with decimal
+    (r"<think>calculating...</think>The value is \boxed{3.14}", "3.14"),
+    
+    # Positive case: negative number
+    (r"<think>t</think>\boxed{-5}", "-5"),
+    
+    # Positive case: expression result
+    (r"<think>t</think>\boxed{26}", "26"),
+])
+def test_student_pattern_positive(text, expected_answer):
+    result = extract_format(text, STUDENT_PATTERN)
+    assert result == expected_answer
+
+
+@pytest.mark.parametrize("text", [
+    # Negative case: missing <think>
+    r"\boxed{8}",
+    
+    # Negative case: <think> not at start
+    r"text before<think>t</think>\boxed{8}",
+    
+    # Negative case: text after boxed
+    r"<think>t</think>\boxed{8} more text",
+    
+    # Negative case: trailing whitespace after boxed (not allowed)
+    r"<think>t</think>\boxed{8}   ",
+    
+    # Negative case: missing boxed
+    "<think>t</think>x = 8",
+])
+def test_student_pattern_negative(text):
+    result = extract_format(text, STUDENT_PATTERN)
+    assert result is None
+
+
+def test_student_pattern_multiple_boxed():
+    """When multiple \\boxed{} exist, the last one at end is matched."""
+    text = r"<think>t</think>\boxed{8} and also \boxed{9}"
+    result = extract_format(text, STUDENT_PATTERN)
+    # The pattern matches the last \boxed{} which is at the end
+    assert result == "9"
