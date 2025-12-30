@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 from textwrap import dedent
 from environment.execution import (
     verify,
-    execute_answer,
 )
 from environment.format import (
     TEACHER_PATTERN,
@@ -15,13 +14,10 @@ from environment.format import (
     extract_format,
 )
 
-
 class Reward(BaseModel):
     """
     Reward for the curriculum and answer.
-
     """
-
     reward: Optional[float] = Field(
         None, description="Reward for the curriculum and answer."
     )

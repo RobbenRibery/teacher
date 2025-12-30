@@ -181,7 +181,7 @@ def rollout(
         raise ValueError("reward_fn must return a Reward object for each completion")
 
     rewards: torch.FloatTensor = torch.tensor(
-        rewards, dtype=torch.bfloat16, device=model.device
+        rewards, device=model.device
     )
     assert rewards.shape == (num_samples,), (
         f"reward_fn must return rewards of shape ({num_samples},), got {rewards.shape}"

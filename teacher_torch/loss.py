@@ -335,59 +335,26 @@ def sequences_log_probs(
     if return_entropy:
         token_entropy: list[torch.Tensor] = []
 
-    # Create CUDA streams for parallel execution
-    device = sequence_ids.device
-    use_cuda = device.type == "cuda"
-    if use_cuda and ref_model is not None:
-        stream_model = torch.cuda.Stream(device=device)
-        stream_ref = torch.cuda.Stream(device=device)
-
     for i in range(0, sequence_ids.shape[0], logits_minibatch_size):
         mini_ids = sequence_ids[i : i + logits_minibatch_size]
         mini_mask = sequence_attention_mask[i : i + logits_minibatch_size]
-        
-        if use_cuda and ref_model is not None:
-            # Parallel forward passes using CUDA streams
-            mini_logits = None
-            ref_mini_logits = None
-            
-            # Launch model forward on stream_model
-            with torch.cuda.stream(stream_model):
-                mini_output = model(
+
+        # Sequential execution is safer and often just as fast due to GPU saturation
+        mini_output = model(
+            input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
+        )
+        mini_logits: torch.FloatTensor = mini_output["logits"]
+        del mini_output
+
+        if ref_model is not None:
+            with torch.inference_mode():
+                ref_mini_output = ref_model(
                     input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
                 )
-                mini_logits = mini_output["logits"]
-                del mini_output
-            
-            # Launch ref_model forward on stream_ref (inference mode for speed)
-            with torch.cuda.stream(stream_ref):
-                with torch.inference_mode():
-                    ref_mini_output = ref_model(
-                        input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
-                    )
-                    ref_mini_logits = ref_mini_output["logits"]
-                    del ref_mini_output
-            
-            # Synchronize both streams before processing logits
-            stream_model.synchronize()
-            stream_ref.synchronize()
+                ref_mini_logits: torch.FloatTensor = ref_mini_output["logits"]
+                del ref_mini_output
         else:
-            # Sequential execution (CPU or no ref_model)
-            mini_output = model(
-                input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
-            )
-            mini_logits:torch.FloatTensor = mini_output["logits"]
-            del mini_output
-            
-            if ref_model is not None:
-                with torch.inference_mode():
-                    ref_mini_output = ref_model(
-                        input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
-                    )
-                    ref_mini_logits:torch.FloatTensor = ref_mini_output["logits"]
-                    del ref_mini_output
-            else:
-                ref_mini_logits = None
+            ref_mini_logits = None
 
         logger.info(f"Mini logits shape: {mini_logits.shape}")
         del mini_mask
@@ -415,6 +382,7 @@ def sequences_log_probs(
 
     del mini_logits, mini_ids
     torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
     
     reconstructed_logprobs = torch.cat(token_logprobs, dim=0)
     reconstructed_entropy = torch.cat(token_entropy, dim=0) if return_entropy else None
