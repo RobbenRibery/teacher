@@ -218,7 +218,7 @@ def load_model_tokenizer(
         dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
         device_map=device_map,
     )
-    model = torch.compile(model, mode="max-autotune", dynamic=True)
+    model = torch.compile(model, mode="max-autotune-no-cudagraphs", dynamic=True)
     logger.debug(f"Model loaded on {model.device}")
     logger.debug(f"Model dtype: {model.dtype}")
     logger.debug(f"Model architecture:\n{model}")
@@ -250,15 +250,36 @@ def expand_prompts_for_group(prompts: list[str], group_size: int) -> list[str]:
     """
     return [p for p in prompts for _ in range(group_size)]
 
-
-if __name__ == "__main__":
-    model, tokenizer = load_model_tokenizer("Qwen/Qwen3-0.6B")
-    rich.print(model)
-    rich.print(tokenizer)
-
-    encoding = tokenizer.encode("Hello, world!", return_tensors="pt").to(model.device)
-    rich.print(encoding)
-
-    output = model.generate(encoding, max_new_tokens=10, do_sample=False)
-    rich.print(output)
-    rich.print(tokenizer.decode(output[0], skip_special_tokens=True))
+def split_seed(seed: int) -> int:
+    """
+    Deterministically derive a new seed from the input seed.
+    
+    Mimics JAX's jax.random.split() behavior - given the same input seed,
+    always produces the same output seed. Useful for advancing the random
+    state in a reproducible way.
+    
+    Args:
+        seed: The input seed.
+        
+    Returns:
+        A new seed deterministically derived from the input seed.
+        
+    Example:
+        >>> seed = 42
+        >>> seed = split_seed(seed)  # advance to next seed
+        >>> reset_seed(seed)
+        >>> # ... do sampling ...
+        >>> seed = split_seed(seed)  # advance again
+    """
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    
+    new_seed = torch.randint(
+        low=0,
+        high=2**31 - 1,
+        size=(1,),
+        generator=generator,
+        dtype=torch.int64,
+    ).item()
+    
+    return new_seed

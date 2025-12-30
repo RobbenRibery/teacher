@@ -17,8 +17,8 @@ Key features:
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, asdict
-from typing import Optional, Any, Callable, Protocol
+from dataclasses import dataclass
+from typing import Optional, Any, Callable
 
 import torch
 from transformers import GenerationConfig
@@ -29,6 +29,7 @@ from teacher_torch.sampling import SamplingOutput
 from teacher_torch.utils import (
     setup_logger_with_file_line,
     load_model_tokenizer, 
+    split_seed,
 )
 from teacher_torch.policy_gradient import update 
 from teacher_torch.configs import (
@@ -240,12 +241,12 @@ class GRPOTrainer:
             raise ValueError("Teacher reward function is required")
 
         prompts = [self._build_teacher_prompt()]
-        rollout_config = RolloutConfig(
-            seed=self.teacher_generation_config.seed,
-            normalize_advantages=self.train_config.normalize_advantages,
-        )
 
-        def do_rollout() -> tuple[TeacherExperience, RolloutMetric]:
+        def do_rollout(seed: int) -> tuple[TeacherExperience, RolloutMetric]:
+            rollout_config = RolloutConfig(
+                seed=seed,
+                normalize_advantages=self.train_config.normalize_advantages,
+            )
             return rollout(
                 model=self.model,
                 tokenizer=self.tokenizer,
@@ -266,27 +267,44 @@ class GRPOTrainer:
 
         # Single rollout if no filtering needed
         if min_legit <= 0:
-            return do_rollout()
+            return do_rollout(seed=self.teacher_generation_config.seed)
 
         # Accumulate correctly formatted curricula
         curated: Optional[TeacherExperience] = None
         experience, metrics = None, None
+        current_seed = self.teacher_generation_config.seed
 
-        for _ in range(max_attempts):
-            experience, metrics = do_rollout()
+        for idx in range(max_attempts):
+            num_curricula = curated.num_curricula if curated is not None else 0
+            logger.info(f"========= Rolling out teacher... {idx + 1}/{max_attempts} | Accumulating {num_curricula}/{min_legit} curricula ==========")
+            experience, metrics = do_rollout(seed=current_seed)
 
-            if (formatted := experience.correct_formatted_experience) is not None:
-                curated = formatted if curated is None else curated.merge(formatted)
+            correct_formatted_experience = experience.correct_formatted_experience
+            logger.info(f"Number of correctly formatted curricula: {correct_formatted_experience.num_curricula if correct_formatted_experience is not None else 0}")
+            
+            # Update seed for next iteration
+            current_seed = split_seed(current_seed)
 
-                if len(curated.curriculums or []) >= min_legit:
-                    break
+            if correct_formatted_experience is not None:
+                if curated is None:
+                    curated = correct_formatted_experience
+                else:
+                    curated = curated.merge(correct_formatted_experience)
 
+                if curated is not None:
+                    logger.info(f"Number of curricula after merging: {curated.num_curricula}")
+                    if curated.num_curricula >= min_legit:
+                        break
+
+        # Save final seed back to config for subsequent calls
+        self.teacher_generation_config.seed = current_seed
         return curated or experience, metrics
 
     def rollout_student(
         self,
         curriculums: list[str],
         student_reward_fn: Callable[[str], CurriculumReward],
+        output_dir: Optional[Path] = None,
     ) -> tuple[StudentExperienceBuffer, RolloutMetric]:
         """Execute student rollout phase.
 
@@ -327,6 +345,7 @@ class GRPOTrainer:
             only_check_format=False,
             source_curriculums=curriculums,
             ref_model=self.ref_model,
+            output_dir=output_dir,
         )
 
     def train_step(

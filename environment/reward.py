@@ -75,10 +75,10 @@ class CurriculumReward(Reward):
             - Error: {self.error}
             - Feedback: {self.feedback}
             ## Extracted Curriculum
-            {self.extracted_curriculum}
+            {self.extracted_curriculum.strip() if self.extracted_curriculum else "None"}
             ===============================
             """
-        )
+        ).strip()
 
 
 class AnswerReward(Reward):

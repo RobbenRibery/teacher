@@ -297,7 +297,6 @@ def _sequence_log_probs_from_logits(
     else:
         return log_probs, None
 
-
 @torch.compile(dynamic=True)
 def sequences_log_probs(
     model: PreTrainedModel,
@@ -362,27 +361,30 @@ def sequences_log_probs(
         # Compute log probs for current model
         # logits: [batch_size * num_rollouts, seq_len, vocab_size]
         log_probs, entropy = _sequence_log_probs_from_logits(
-            logits=mini_logits[:, :-1],
+            logits=mini_logits[:, :-1],#.clone(),
             output_ids=mini_ids[:, 1:],  # right shift 1 block to get the actual output ids
             return_entropy=return_entropy,
         )
+        del mini_logits
+
+        ref_log_probs = None
+        # Compute log probs for reference model (no entropy needed)
+        if ref_mini_logits is not None:
+            ref_log_probs, _ = _sequence_log_probs_from_logits(
+                logits=ref_mini_logits[:, :-1],#.clone(),
+                output_ids=mini_ids[:, 1:],
+                return_entropy=False,
+            )
+            del ref_mini_logits
+        
+        release_memory(vars=[mini_ids])
+
         token_logprobs.append(log_probs)
         if return_entropy:
             token_entropy.append(entropy)
         
-        # Compute log probs for reference model (no entropy needed)
-        if ref_mini_logits is not None:
-            ref_log_probs, _ = _sequence_log_probs_from_logits(
-                logits=ref_mini_logits[:, :-1],
-                output_ids=mini_ids[:, 1:],
-                return_entropy=False,
-            )
+        if ref_log_probs is not None:
             ref_token_logprobs.append(ref_log_probs)
-            del ref_mini_logits
-
-    del mini_logits, mini_ids
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
     
     reconstructed_logprobs = torch.cat(token_logprobs, dim=0)
     reconstructed_entropy = torch.cat(token_entropy, dim=0) if return_entropy else None

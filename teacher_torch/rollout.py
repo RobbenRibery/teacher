@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
-from environment.reward import Reward
+from environment.reward import CurriculumReward, AnswerReward
 
 from teacher_torch.sampling import sample_responses_hf
 from teacher_torch.experience import TeacherExperience, StudentExperienceBuffer
@@ -62,7 +62,7 @@ class RolloutMetric:
 
 
 # Type alias for reward functions
-RewardFn = Callable[[str], Type[Reward]]
+RewardFn = Callable[[str], Type[CurriculumReward | AnswerReward]]
 
 
 @torch.inference_mode()
@@ -170,11 +170,11 @@ def rollout(
     )
 
     rewards, advantages, learnability = None, None, None
-    reward_outputs: list[Type[Reward]] = [
+    reward_outputs: list[Type[CurriculumReward | AnswerReward]] = [
         reward_fn(completion) for completion in sampling_output.completions
     ]
-    for i, reward_output in enumerate(reward_outputs):
-        logger.info(f"\033[35mReward output {i}: \n======\n{reward_output}\033[0m")
+    for i, reward_output in enumerate[type[CurriculumReward] | type[AnswerReward]](reward_outputs):
+        logger.info(f"\033[35mReward output {i}: \n======\n{str(reward_output)}\033[0m")
 
     rewards: list[float] = [reward.reward for reward in reward_outputs]
     if any(reward is None for reward in reward_outputs):
@@ -254,9 +254,8 @@ def rollout(
             action_log_probs=action_log_probs,
             action_log_probs_ref=ref_log_probs,
             rewards=rewards,
-            advantages=advantages,
-            learnability=learnability,
             only_check_format=only_check_format,
+            curriculums=[reward_output.extracted_curriculum for reward_output in reward_outputs],
         )
 
     return experience, metrics

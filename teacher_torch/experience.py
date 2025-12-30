@@ -50,6 +50,7 @@ class Experience:
             members[f.name] = v
         return type(self)(**members)
 
+@dataclass
 class TeacherExperience(Experience):
     """
     Teacher experience that holds generated curricula.
@@ -61,8 +62,12 @@ class TeacherExperience(Experience):
     correct_formatted_experience.
     """
 
-    curriculums: Optional[list[str]] = None  # Extracted curriculum (python programs) from completions
+    curriculums: Optional[list[str | None]] = None  # Extracted curriculum (python programs) from completions
     only_check_format: bool = True  # Whether this experience is only for format checking
+
+    @property
+    def num_curricula(self) -> int:
+        return len(self.curriculums) if self.curriculums is not None else 0
 
     @property
     def correct_formatted_experience(self) -> Optional["TeacherExperience"]:
@@ -82,6 +87,11 @@ class TeacherExperience(Experience):
 
         # Get indices where reward >= 1.0
         correct_indices = torch.where(self.rewards >= 1.0)[0]
+        curriculums: list[str] = [self.curriculums[i] for i in correct_indices.tolist()] 
+        if any(curriculum is None for curriculum in curriculums):
+            raise ValueError(
+                f"curriculums must not be None for any of the correct indices, got {curriculums}"
+            )
 
         # If no correct samples, return None
         if len(correct_indices) == 0:
@@ -92,9 +102,7 @@ class TeacherExperience(Experience):
             prompt=self.prompt,
             completions=[self.completions[i] for i in correct_indices.tolist()],
             pad_token_id=self.pad_token_id,
-            curriculums=[self.curriculums[i] for i in correct_indices.tolist()]
-            if self.curriculums is not None
-            else None,
+            curriculums=curriculums,
             sequence_ids=self.sequence_ids[correct_indices],
             sequence_attention_mask=self.sequence_attention_mask[correct_indices],
             action_mask=self.action_mask[correct_indices],
@@ -124,7 +132,7 @@ class TeacherExperience(Experience):
             New TeacherExperience with merged data containing only unique completions.
         """
         # Track seen completions from self
-        seen_completions = set(self.completions)
+        seen_completions = set[str](self.completions)
         unique_indices_other = []
         
         for idx, completion in enumerate(other.completions):
@@ -289,13 +297,10 @@ class TeacherExperience(Experience):
         sampling_output: "SamplingOutput",
         pad_token_id: int,
         action_log_probs: torch.FloatTensor,
+        rewards: torch.FloatTensor,
+        curriculums: list[Optional[str]],
+        only_check_format: bool = True,
         action_log_probs_ref: Optional[torch.FloatTensor] = None,
-        rewards: Optional[torch.FloatTensor] = None,
-        advantages: Optional[torch.FloatTensor] = None,
-        solved_mask: Optional[torch.BoolTensor] = None,
-        learnability: Optional[torch.FloatTensor] = None,
-        only_check_format: bool = False,
-        curriculums: Optional[list[str]] = None,
     ) -> Self:
         """
         Create a TeacherExperience from a SamplingOutput.
@@ -312,7 +317,7 @@ class TeacherExperience(Experience):
             solved_mask: Solved mask for each sample, shape (group_size,).
             learnability: Learnability score, scalar.
             only_check_format: Whether this is only for format checking.
-            curriculums: Optional list of extracted curriculums (python programs).
+            curriculums: List of extracted curriculums (python programs).
 
         Returns:
             TeacherExperience with the generated curricula.
@@ -336,19 +341,15 @@ class TeacherExperience(Experience):
                 f"rewards.shape[0] ({rewards.shape[0]}) must equal num_samples ({num_samples})"
             )
 
-        if advantages is not None and advantages.shape[0] != num_samples:
-            raise ValueError(
-                f"advantages.shape[0] ({advantages.shape[0]}) must equal num_samples ({num_samples})"
-            )
-
         prompt = sampling_output.prompts[0]
-        group_completions = sampling_output.completions
-
-        learnability_value = learnability.item() if learnability is not None else None
+        if len(set(sampling_output.prompts)) != 1:
+            raise ValueError(
+                f"sampling_output.prompts must have only one unique prompt, got {len(set(sampling_output.prompts))}"
+            )
 
         return cls(
             prompt=prompt,
-            completions=group_completions,
+            completions=sampling_output.completions,
             pad_token_id=pad_token_id,
             curriculums=curriculums,
             sequence_ids=sampling_output.sequence_ids,
@@ -358,11 +359,9 @@ class TeacherExperience(Experience):
             action_log_probs_ref=action_log_probs_ref,
             rewards=rewards,
             only_check_format=only_check_format,
-            solved_mask=solved_mask,
-            advantages=advantages,
-            learnability=learnability_value,
         ).to(device="cpu")
 
+@dataclass
 class StudentExperience(Experience):
     """
     Student experience that tracks which curriculum it was seeded from.
@@ -371,7 +370,7 @@ class StudentExperience(Experience):
     that was used to generate this student's problem prompt.
     """
 
-    source_curriculum: str  # The curriculum this student experience originated from
+    source_curriculum: Optional[str] = None  # The curriculum this student experience originated from
 
     @property
     def solved_rate(self) -> float:
