@@ -11,6 +11,7 @@ from typing import Callable, Optional, Type, Union
 from dataclasses import dataclass
 from pathlib import Path
 import torch
+from teacher_torch.utils import release_memory
 from transformers import PreTrainedModel, PreTrainedTokenizer, GenerationConfig
 from environment.reward import CurriculumReward, AnswerReward
 
@@ -67,7 +68,7 @@ RewardFn = Callable[[str], Type[CurriculumReward | AnswerReward]]
 @torch.inference_mode()
 def rollout(
     model: PreTrainedModel,
-    reward_fn: RewardFn,
+    reward_fn: RewardFn | list[RewardFn],
     tokenizer: PreTrainedTokenizer,
     prompts: list[str],
     generation_config: GenerationConfig,
@@ -156,6 +157,7 @@ def rollout(
             logger.info(f"Saved completion {i} to {output_dir / f'completion_{i}.txt'}")
 
     logger.info(f"Sampling Statistics:\n======\n{str(sampling_output)}")
+    release_memory()
 
     # === Step 2: Compute old log probs (behavior policy) ===
     # These are needed for importance sampling in PPO/GRPO
@@ -169,10 +171,21 @@ def rollout(
     )
 
     rewards, advantages, learnability = None, None, None
-    reward_outputs: list[Type[CurriculumReward | AnswerReward]] = [
-        reward_fn(completion) for completion in sampling_output.completions
-    ]
-    for i, reward_output in enumerate[type[CurriculumReward] | type[AnswerReward]](reward_outputs):
+
+    # Compute rewards for each completion
+    if callable(reward_fn):
+        reward_outputs: list[Type[CurriculumReward | AnswerReward]] = [
+            reward_fn(completion) for completion in sampling_output.completions
+        ]
+    elif isinstance(reward_fn, list):
+        reward_outputs = [
+            reward_fn[i](completion) for i, completion in enumerate(sampling_output.completions)
+        ]
+    else:
+        raise ValueError("reward_fn must be a callable or list of callables")
+
+
+    for i, reward_output in enumerate(reward_outputs):
         logger.info(f"\033[35mReward output {i}: \n======\n{str(reward_output)}\033[0m")
 
     rewards: list[float] = [reward.reward for reward in reward_outputs]

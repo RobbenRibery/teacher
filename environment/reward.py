@@ -170,18 +170,10 @@ def reward_curriculum(
         format_only=False,
     )
 
-
-# Partial version that only checks format (does not require answer_group_rewards)
-reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
-    reward_curriculum, format_regex=TEACHER_PATTERN, check_format_only=True
-)
-
-
 def reward_answer(
     extracted_curriculum: str,
     answer_generation: str,
-    format_regex: str = STUDENT_PATTERN,
-    use_last_match: bool = True,
+    format_regex: str,
     variable_name: str = "x",
     check_diversity: bool = False,
 ) -> AnswerReward:
@@ -236,7 +228,6 @@ def reward_answer(
         reward=1.0 if verification_result.correct else 0.0,
     )
 
-
 async def _reward_answer_async(
     extracted_curriculum: str,
     answer_generation: str,
@@ -285,3 +276,13 @@ async def reward_answer_group(
             )
 
     return [task.result() for task in tasks]
+
+
+# Partial version that only checks format (does not require answer_group_rewards)
+function_reward_curriculum_format_only: Callable[[str], CurriculumReward] = partial(
+    reward_curriculum, format_regex=TEACHER_PATTERN, check_format_only=True
+)
+
+function_reward_answer: Callable[[tuple[str,str]], AnswerReward] = partial(
+    reward_answer, format_regex=STUDENT_PATTERN,  variable_name="x", check_diversity=False
+)

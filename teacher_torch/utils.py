@@ -28,8 +28,8 @@ try:
 except ImportError:
     HAS_COLORLOG = False
 import torch
-import rich
-
+import torch._dynamo
+torch._dynamo.config.recompile_limit = 16  # Default is 8
 
 def setup_logger_with_file_line(
     logger_name: str, level: int = logging.INFO, use_colors: Optional[bool] = None
@@ -218,7 +218,7 @@ def load_model_tokenizer(
         dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
         device_map=device_map,
     )
-    model = torch.compile(model, mode="max-autotune-no-cudagraphs", dynamic=True)
+    # model.forward = torch.compile(model.forward, dynamic=True, mode="max-autotune-no-cudagraphs")
     logger.debug(f"Model loaded on {model.device}")
     logger.debug(f"Model dtype: {model.dtype}")
     logger.debug(f"Model architecture:\n{model}")

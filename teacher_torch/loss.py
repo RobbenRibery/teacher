@@ -297,7 +297,7 @@ def _sequence_log_probs_from_logits(
     else:
         return log_probs, None
 
-@torch.compile(dynamic=True)
+# Removed @torch.compile(dynamic=True) to avoid Inductor OOMs on large buffers
 def sequences_log_probs(
     model: PreTrainedModel,
     sequence_ids: torch.Tensor,
@@ -346,6 +346,8 @@ def sequences_log_probs(
         del mini_output
 
         if ref_model is not None:
+            # Disable compilation for reference model to avoid OOM/recompilation overhead
+            # We just need the logits for KL, no need for optimized graph
             with torch.inference_mode():
                 ref_mini_output = ref_model(
                     input_ids=mini_ids, attention_mask=mini_mask, use_cache=False
@@ -376,15 +378,15 @@ def sequences_log_probs(
                 return_entropy=False,
             )
             del ref_mini_logits
-        
-        release_memory(vars=[mini_ids])
-
+    
         token_logprobs.append(log_probs)
         if return_entropy:
             token_entropy.append(entropy)
         
         if ref_log_probs is not None:
             ref_token_logprobs.append(ref_log_probs)
+        
+        release_memory(vars=[mini_ids])
     
     reconstructed_logprobs = torch.cat(token_logprobs, dim=0)
     reconstructed_entropy = torch.cat(token_entropy, dim=0) if return_entropy else None

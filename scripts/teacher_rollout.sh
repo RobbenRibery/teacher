@@ -1,1 +1,1 @@
-uv run -m scripts.teacher_rollout
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run -m scripts.teacher_rollout

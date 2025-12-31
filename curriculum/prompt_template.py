@@ -85,14 +85,9 @@ class StudentPrompt(PromptTemplate):
 
     system: str = Field(
         default=dedent(
-            """
-        You are an exceptionally skilled assistant.
-
-        Output requirements:
-        - Provide your final response inside a single <answer>...</answer> block.
-        - Inside <answer>, include exactly one ```python code block.
-        - Do not include any text after </answer>.
-        - Any <think>...</think> content should appear BEFORE <answer>.
+        """
+        You are an exceptionally skilled reasoner who can solve problems step by step.
+        You should end your response with "The answer is \\boxed{value}" where value is your final answer.
         """
         ).strip(),
         description="The system prompt for the student.",

@@ -40,7 +40,7 @@ class BooleanConstraintsSatisfaction(Task):
     
     ### Properties of the curriculum
     * At least 1 solution to x must exist, though problems can have multiple solutions.
-    * The student must be able to exercise a set of general skills (i.e. math, programming or logic) while solving the problem.
+    * The problem must be non-trival, such that the student must be able to exercise reasoning skills while solving the problem.
     * Only a single variable x is allowed.
     """
     ).strip()
@@ -48,14 +48,13 @@ class BooleanConstraintsSatisfaction(Task):
     format: str = dedent(
         """
     ### Guideline
-    - Put your final designed problem inside the ```python\n...\n``` block and don't include solutions or hints.
-    - Your response MUST include exactly 1 ```python\n...\n``` block.
-    - Add "# Reason step by step and derive a solution of x" inside the python code block.
-    - Do not include any text after ```python\n...\n``` block.
+    - Put your final designed problem inside exactly 1 ```python\n...\n``` block and don't include solutions or hints.
+    - Copy the commented line "# Reason step by step and derive the value of x." inside the python code block.
+    - End right after the python code block.
 
-    ### Example response
+    ### Example final section of the response
     ```python
-    # Reason step by step and derive a solution of x.
+    # Reason step by step and derive the value of x。
     constraints = [
         lambda x: ...,
         lambda x: ...,

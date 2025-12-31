@@ -20,6 +20,7 @@ dependencies = [
     "flash-attn>=2.8.3",
     "wandb",
     "rich",
+    "ruff>=0.14.10",
 ]
 
 [project.optional-dependencies]

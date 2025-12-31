@@ -9,9 +9,8 @@ from dataclasses import asdict
 from datetime import datetime
 from scripts.config import parse_args
 from teacher_torch.trainer import GRPOTrainer
-from teacher_torch.experience import TeacherExperience
 from teacher_torch.utils import configure_torch_for_training
-from environment.reward import reward_curriculum_format_only
+from environment.reward import function_reward_curriculum_format_only
 import rich 
 import json
 
@@ -41,7 +40,7 @@ def main() -> None:
     rich.print("Teacher Rollout")
     rich.print("=" * 60)
     rich.print(f"Model: {config.mode_name_or_path}")
-    rich.print(f"Teacher group size: {config.teacher_group_size}")
+    rich.print(f"Teacher group size: {config.teacher_generation_config.teacher_group_size}")
     
     # Create trainer
     trainer = GRPOTrainer(config)
@@ -55,7 +54,7 @@ def main() -> None:
     # Run teacher rollout
     rich.print("Running teacher rollout...")
     teacher_exp, teacher_metrics = trainer.rollout_teacher(
-        teacher_reward_fn=reward_curriculum_format_only,
+        teacher_reward_fn=function_reward_curriculum_format_only,
         output_dir=output_dir,
     )
     

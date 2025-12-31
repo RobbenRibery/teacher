@@ -22,21 +22,22 @@ def _default_teacher_gen_config(seed: int = 42) -> TeacherGenerationConfig:
         repetition_penalty=1.25,
         seed=seed,
         do_sample=True,
-        teacher_group_size=8,
+        teacher_group_size=16,
     )
 
 
 def _default_student_gen_config(seed: int = 42) -> StudentGenerationConfig:
     """Create default student generation config."""
     return StudentGenerationConfig(
-        max_new_tokens=4096,
-        temperature=0.8,
-        top_k=20,
+        max_new_tokens=8192,
+        temperature=0.7,
+        top_k=50,
         top_p=0.95,
         min_p=0.0,
-        repetition_penalty=1.0,
+        repetition_penalty=1.25,
         seed=seed,
-        student_group_size=16,
+        do_sample=True,
+        student_group_size=8,
     )
 
 
@@ -47,7 +48,7 @@ def _default_config() -> GRPOTrainingConfig:
         teacher_generation_config=_default_teacher_gen_config(),
         student_generation_config=_default_student_gen_config(),
         minimal_legit_curriculum_per_iteration=32,
-        max_trail_attempts_per_iteration=10,
+        max_trail_attempts_per_iteration=20,
     )
 
 

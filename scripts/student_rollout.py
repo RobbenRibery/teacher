@@ -11,47 +11,13 @@ import torch
 from pathlib import Path
 from dataclasses import asdict
 from datetime import datetime
-from functools import partial
-from typing import Optional
 from scripts.config import parse_args
 from teacher_torch.trainer import GRPOTrainer
 from teacher_torch.utils import configure_torch_for_training
 from teacher_torch.experience import TeacherExperience
-from environment.reward import reward_answer, AnswerReward
+from environment.reward import function_reward_answer
 from environment.format import STUDENT_PATTERN
 import rich
-
-
-
-def create_student_reward_fn(curriculums: list[str], group_size: int):
-    """Create a stateful reward function for student completions.
-    
-    The function tracks completion indices to map each completion
-    back to its source curriculum.
-    
-    Args:
-        curriculums: List of curriculum strings (extracted Python programs).
-        group_size: Number of completions per curriculum.
-        
-    Returns:
-        A reward function that takes a completion string and returns AnswerReward.
-    """
-    state = {"completion_idx": 0}
-    
-    def reward_fn(completion: str) -> AnswerReward:
-        curriculum_idx = state["completion_idx"] // group_size
-        state["completion_idx"] += 1
-        
-        # Get the curriculum for this completion
-        curriculum = curriculums[curriculum_idx]
-        
-        return reward_answer(
-            extracted_curriculum=curriculum,
-            answer_generation=completion,
-            format_regex=STUDENT_PATTERN,
-        )
-    
-    return reward_fn
 
 
 def main() -> None:
@@ -106,7 +72,7 @@ def main() -> None:
     rich.print("Student Rollout")
     rich.print("=" * 60)
     rich.print(f"Model: {config.mode_name_or_path}")
-    rich.print(f"Student group size: {config.student_group_size}")
+    rich.print(f"Student group size: {config.student_generation_config.student_group_size}")
     rich.print(f"Number of curriculums: {len(valid_curriculums)}")
     
     # Create trainer
@@ -117,18 +83,13 @@ def main() -> None:
     with open(output_dir / "config.json", "w") as f:
         json.dump(config_dict, f, indent=4)
     rich.print(f"Config saved to {output_dir / 'config.json'}")
-    
-    # Create the student reward function
-    student_reward_fn = create_student_reward_fn(
-        curriculums=valid_curriculums,
-        group_size=config.student_group_size,
-    )
+
     
     # Run student rollout
     rich.print("Running student rollout...")
     student_buffer, student_metrics = trainer.rollout_student(
         curriculums=valid_curriculums,
-        student_reward_fn=student_reward_fn,
+        student_reward_fn=function_reward_answer,
         output_dir=output_dir,
     )
     

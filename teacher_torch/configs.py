@@ -30,7 +30,7 @@ class GenerationConfig:
 class TeacherGenerationConfig(GenerationConfig):
     """Configuration for GRPO generation."""
     teacher_group_size: int = 4 
-    max_new_tokens: int = 8192
+    max_new_tokens: int = 4096
     stop_strings: Optional[list[str]] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -68,10 +68,13 @@ class TrainingConfig:
     minimal_legit_curriculum_per_iteration: int = 8
     max_trail_attempts_per_iteration: int = 10
 
+    # rollout configuration
+    student_rollout_batch_size: int = 4
+
     # Training loop configuration
     epochs_per_step: int = 1
     mini_batch_size: int = 4
-    logits_minibatch_size: int = 128
+    logits_minibatch_size: int = 16
 
     # Training configuration
     learning_rate: float = 1e-5
@@ -102,10 +105,6 @@ class GRPOTrainingConfig(TrainingConfig):
         clip_eps: PPO clipping epsilon for importance ratio.
         kl_beta: KL penalty coefficient (higher = more conservative updates).
     """
-    # Generation configuration
-    teacher_group_size: int = 8
-    student_group_size: int = 16
-
     # GRPO hyperparameters
     clip_eps: float = 0.2
     kl_beta: float = 0.04

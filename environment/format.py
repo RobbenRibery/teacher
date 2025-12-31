@@ -35,15 +35,17 @@ TEACHER_PATTERN = (
 )
 
 # Student output format - thinking followed by answer in \boxed{}
-# MUST end with \boxed{...}
+# MUST have exactly one \boxed{...} after the <think> block.
 # Matches:
 #   - Mandatory <think>...</think> block at the very start
-#   - Any content in between (non-greedy)
-#   - \boxed{...} at the END of completion (required, no trailing whitespace)
+#   - Text that does NOT contain any other \boxed{
+#   - The unique \boxed{...} (group 1)
+#   - Text that does NOT contain any other \boxed{ until the end
 STUDENT_PATTERN = (
     r"^<think>.*?</think>"          # Mandatory thinking block at start
-    r".*?"                          # Any content before boxed (non-greedy)
-    r"\\boxed\{([^}]*)\}$"          # \boxed{} MUST be at END of completion (no trailing whitespace)
+    r"(?:(?!\\boxed\{).)*"          # No other boxes allowed before the answer
+    r"\\boxed\{([^}]*)\}"           # The answer box
+    r"\s*$"                         # MUST be the end of the string (only whitespace allowed)
 )
 
 # Simpler pattern that only matches the code block (no thinking required)
