@@ -21,7 +21,6 @@ from teacher_torch.utils import setup_logger_with_file_line
 
 logger = setup_logger_with_file_line(__name__)
 
-
 @dataclass
 class RolloutConfig:
     """Configuration for rollout behavior.

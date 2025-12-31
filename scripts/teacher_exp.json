@@ -1,0 +1,14 @@
+{
+    "prompt": "Generate a curriculum problem...",
+    "completions": [
+        "<think>reasoning...</think>\n```python\ndef check(x):\n    return x > 10 and x < 20\n```",
+        "<think>reasoning...</think>\n```python\ndef check(x):\n    return x % 2 == 0\n```"
+    ],
+    "curriculums": [
+        "def check(x):\n    return x > 10 and x < 20",
+        "def check(x):\n    return x % 2 == 0"
+    ],
+    "pad_token_id": 0,
+    "only_check_format": true
+}
+

@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import wandb
+import torch
 from pathlib import Path
 from dataclasses import asdict
 from datetime import datetime
 from scripts.config import parse_args
 from teacher_torch.trainer import GRPOTrainer
+from teacher_torch.experience import TeacherExperience
 from teacher_torch.utils import configure_torch_for_training
 from environment.reward import reward_curriculum_format_only
 import rich 
 import json
+
+
 
 def main() -> None:
     """Run teacher rollout with config from CLI and log to wandb."""
@@ -83,6 +87,18 @@ def main() -> None:
                 f.write(str(teacher_exp.rewards[j].item()))
     
     rich.print(f"Results saved to {output_dir}")
+    
+    # Save TeacherExperience as JSON for student_rollout.py
+    teacher_exp_dict = teacher_exp.to_dict()
+    teacher_exp_json_path = Path("scripts/teacher_exp.json")
+    with open(teacher_exp_json_path, "w") as f:
+        json.dump(teacher_exp_dict, f, indent=4)
+    rich.print(f"TeacherExperience saved to {teacher_exp_json_path}")
+    
+    # Also save a copy in output_dir for archival
+    with open(output_dir / "teacher_exp.json", "w") as f:
+        json.dump(teacher_exp_dict, f, indent=4)
+    
     rich.print("Rollout complete!")
     
     # Finish wandb run

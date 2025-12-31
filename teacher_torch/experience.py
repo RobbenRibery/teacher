@@ -361,6 +361,70 @@ class TeacherExperience(Experience):
             only_check_format=only_check_format,
         ).to(device="cpu")
 
+    def to_dict(self) -> dict:
+        """Convert TeacherExperience to a JSON-serializable dictionary.
+        
+        Converts torch tensors to nested lists for JSON serialization.
+        
+        Returns:
+            Dictionary that can be serialized to JSON.
+        """
+        def tensor_to_list(t: torch.Tensor | None) -> list | None:
+            if t is None:
+                return None
+            return t.tolist()
+        
+        return {
+            "prompt": self.prompt,
+            "completions": self.completions,
+            "curriculums": self.curriculums,
+            "pad_token_id": self.pad_token_id,
+            "only_check_format": self.only_check_format,
+            "sequence_ids": tensor_to_list(self.sequence_ids),
+            "sequence_attention_mask": tensor_to_list(self.sequence_attention_mask),
+            "action_mask": tensor_to_list(self.action_mask),
+            "action_log_probs": tensor_to_list(self.action_log_probs),
+            "action_log_probs_ref": tensor_to_list(self.action_log_probs_ref),
+            "rewards": tensor_to_list(self.rewards),
+            "solved_mask": tensor_to_list(self.solved_mask),
+            "advantages": tensor_to_list(self.advantages),
+            "learnability": self.learnability,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TeacherExperience:
+        """Create TeacherExperience from a dictionary.
+        
+        Converts nested lists back to torch tensors.
+        
+        Args:
+            data: Dictionary containing TeacherExperience data.
+            
+        Returns:
+            TeacherExperience instance.
+        """
+        def list_to_tensor(l: list | None, dtype: torch.dtype) -> torch.Tensor | None:
+            if l is None:
+                return None
+            return torch.tensor(l, dtype=dtype)
+        
+        return cls(
+            prompt=data["prompt"],
+            completions=data["completions"],
+            curriculums=data["curriculums"],
+            pad_token_id=data["pad_token_id"],
+            only_check_format=data.get("only_check_format", True),
+            sequence_ids=list_to_tensor(data.get("sequence_ids"), torch.int),
+            sequence_attention_mask=list_to_tensor(data.get("sequence_attention_mask"), torch.int),
+            action_mask=list_to_tensor(data.get("action_mask"), torch.bool),
+            action_log_probs=list_to_tensor(data.get("action_log_probs"), torch.float),
+            action_log_probs_ref=list_to_tensor(data.get("action_log_probs_ref"), torch.float),
+            rewards=list_to_tensor(data.get("rewards"), torch.float),
+            solved_mask=list_to_tensor(data.get("solved_mask"), torch.bool),
+            advantages=list_to_tensor(data.get("advantages"), torch.float),
+            learnability=data.get("learnability"),
+        )
+
 @dataclass
 class StudentExperience(Experience):
     """
