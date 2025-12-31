@@ -13,23 +13,7 @@ class GenerationConfig:
     repetition_penalty: float = 1.1
     seed: int = 256
     do_sample: bool = True
-
-    def reset_seed(self) -> None:
-        """Split the seed into a new seed (mimics jax.random.split).
-        
-        Returns:
-            New seed. Updates internal seed to this value.
-        """
-        import hashlib
-        
-        # Generate deterministic new seed from current seed
-        hash_input = f"{self.seed}".encode()
-        hash_output = hashlib.sha256(hash_input).digest()
-        new_seed = int.from_bytes(hash_output[:4], byteorder='big')
-        
-        # Update internal seed
-        self.seed = new_seed
-
+    
     def to_dict(self) -> dict[str, Any]:
         """Convert generation config to dictionary."""
         return {
