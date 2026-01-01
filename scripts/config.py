@@ -31,11 +31,11 @@ def _default_student_gen_config(seed: int = 42) -> StudentGenerationConfig:
     """Create default student generation config."""
     return StudentGenerationConfig(
         max_new_tokens=8192,
-        temperature=0.7,
-        top_k=50,
-        top_p=0.95,
+        temperature=1.0,
+        top_k=None,
+        top_p=0.99,
         min_p=0.0,
-        repetition_penalty=1.25,
+        repetition_penalty=1.0,
         seed=seed,
         do_sample=True,
         student_group_size=8,

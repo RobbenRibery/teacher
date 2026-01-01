@@ -165,7 +165,6 @@ def sample_responses_hf(
         padding_side="left",
     )
     pad_token_id = tokenizer.pad_token_id
-    prompt_len = batch_inputs["input_ids"].shape[1]
 
     logger.info(f"Generation config:\n======\n{generation_config.to_dict()}\n======\n")
 

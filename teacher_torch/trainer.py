@@ -389,8 +389,8 @@ class GRPOTrainer:
                 role="student",
                 solved_threshold=self.train_config.solved_threshold,
                 reward_fn=[
-                    lambda completion: partial(
-                        student_reward_fn, extracted_curriculum=c
+                    lambda completion, curriculum=c: partial(
+                        student_reward_fn, extracted_curriculum=curriculum
                     )(answer_generation=completion)
                     for c in batch_curriculums
                 ],
@@ -404,6 +404,7 @@ class GRPOTrainer:
             self.student_generation_config.seed = split_seed(
                 self.student_generation_config.seed
             )
+            logger.info(batch_result.display_buffer_learnability)
 
             # Accumulate results
             all_buffer.extend(batch_result)

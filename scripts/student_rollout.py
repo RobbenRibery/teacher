@@ -154,6 +154,11 @@ def main() -> None:
     with open(output_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=4)
 
+    # Save student experience buffer
+    with open(output_dir / "student_exp.json", "w") as f:
+        json.dump(student_buffer.to_dict(), f, indent=4)
+    rich.print(f"Student experience buffer saved to {output_dir / 'student_exp.json'}")
+
     rich.print(f"\nResults saved to {output_dir}")
     rich.print(f"Mean reward: {student_metrics.mean_reward:.4f}")
     rich.print(f"Mean solved rate: {student_metrics.mean_solved_rate:.4f}")

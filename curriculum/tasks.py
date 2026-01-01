@@ -39,8 +39,8 @@ class BooleanConstraintsSatisfaction(Task):
     To solve such a problem, a student must reason step by step to derive "x" that meets all constraints imposed. 
     
     ### Properties of the curriculum
-    * At least 1 solution to x must exist, though problems can have multiple solutions.
-    * The problem must be non-trival, such that the student must be able to exercise reasoning skills while solving the problem.
+    * At least 1 solution to x must exist, though the problem can have multiple solutions.
+    * The problem must require sophisticated reasoning steps to solve. 
     * Only a single variable x is allowed.
     """
     ).strip()
@@ -49,12 +49,12 @@ class BooleanConstraintsSatisfaction(Task):
         """
     ### Guideline
     - Put your final designed problem inside exactly 1 ```python\n...\n``` block and don't include solutions or hints.
-    - Copy the commented line "# Reason step by step and derive the final value of x." inside the python code block.
+    - Copy the commented line "# Reason step by step to derive a solution of x, which can be any real number." inside the python code block.
     - End right after the python code block.
 
     ### Example final section of the response
     ```python
-    # Reason step by step and derive the final value of x.
+    # Reason step by step to derive a solution of x, which can be any real number.
     constraints = [
         lambda x: ...,
         lambda x: ...,
