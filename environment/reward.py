@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math_verify
 from functools import partial
 from typing import Optional, List, Callable
 from pydantic import BaseModel, Field
@@ -14,10 +15,12 @@ from environment.format import (
     extract_format,
 )
 
+
 class Reward(BaseModel):
     """
     Reward for the curriculum and answer.
     """
+
     reward: Optional[float] = Field(
         None, description="Reward for the curriculum and answer."
     )
@@ -89,10 +92,24 @@ class AnswerReward(Reward):
     answer_generation: str = Field(..., description="The answer generation.")
     extracted_answer: Optional[str] = Field(None, description="The extracted answer.")
 
+    def __str__(self) -> str:
+        return dedent(
+            f"""
+            ===============================
+            Answer Reward:
+            - Reward: {self.reward}
+            - Error: {self.error}
+            - Feedback: {self.feedback}
+            ## Extracted Answer
+            {self.extracted_answer.strip() if self.extracted_answer else "None"}
+            ===============================
+            """
+        ).strip()
+
 
 def reward_curriculum(
     curriculum_generation: str,
-    format_regex: str,
+    format_regex: str = TEACHER_PATTERN,
     answer_group_rewards: Optional[list[AnswerReward]] = None,
     check_format_only: bool = False,
     variable_name: str = "x",
@@ -107,7 +124,6 @@ def reward_curriculum(
         check_format_only: Whether to only check the format of the answer or to execute the answer.
         check_diversity: Whether to check the diversity of the answer.
         format_regex: The regex to extract the curriculum.
-        use_last_match: Whether to use the last match or the first match.
         variable_name: The variable name to use for the answer.
     Returns:
         Reward: The reward for the curriculum and answer.
@@ -170,23 +186,24 @@ def reward_curriculum(
         format_only=False,
     )
 
+
 def reward_answer(
     extracted_curriculum: str,
     answer_generation: str,
-    format_regex: str,
+    format_regex: str = STUDENT_PATTERN,
     variable_name: str = "x",
     check_diversity: bool = False,
 ) -> AnswerReward:
     """
     Reward the answer based on the curriculum.
-    
+
     For student answers in \\boxed{} format, the extracted value is evaluated
     directly as a Python expression (e.g., "26" -> 26, "-5" -> -5, "3.14" -> 3.14).
     """
     # check the format
     extracted_answer = extract_format(
-        text=answer_generation, 
-        regex_format=format_regex
+        text=answer_generation,
+        regex_format=format_regex,
     )
     if not extracted_answer:
         return AnswerReward(
@@ -197,18 +214,49 @@ def reward_answer(
             feedback=f"Please ensure the answer is in the correct format (e.g., \\boxed{{value}}).",
         )
 
-    # For \boxed{} format, evaluate the extracted value directly
-    # The extracted_answer is just the value inside \boxed{}, e.g., "26"
+    # For \boxed{} format, evaluate the extracted value
+    # We try standard eval first (for True, False, 26, etc.)
+    # and fall back to math_verify for LaTeX (for \frac, \sqrt, etc.)
     try:
         answer_value = eval(extracted_answer)
-    except Exception as e:
-        return AnswerReward(
-            answer_generation=answer_generation,
-            extracted_answer=extracted_answer,
-            reward=0.0,
-            error=f"Could not evaluate answer '{extracted_answer}': {e}",
-            feedback=f"The answer must be a valid numeric expression.",
-        )
+    except Exception:
+        try:
+            # math_verify.parse returns a list of SymPy expressions
+            # Wrapping in $ enables LaTeX parsing for expressions like \frac{1}{2}
+            # Only add $ if they are not already present
+            latex_input = extracted_answer.strip()
+            if not (latex_input.startswith("$") and latex_input.endswith("$")):
+                latex_input = f"${latex_input}$"
+            
+            parsed = math_verify.parse(latex_input)
+            if not parsed:
+                raise ValueError("Could not parse as LaTeX")
+            answer_value = parsed[0]
+            
+            # Try to simplify and convert to Python primitives when safe
+            try:
+                if hasattr(answer_value, "simplify"):
+                    answer_value = answer_value.simplify()
+                
+                # Convert to int if it's an exact integer (e.g., sqrt(25) -> 5)
+                if hasattr(answer_value, "is_integer") and answer_value.is_integer:
+                    answer_value = int(answer_value)
+                # Convert to float only if it's a rational number (exact representation)
+                # Keep irrational SymPy objects as-is for symbolic comparison
+                elif hasattr(answer_value, "is_rational") and answer_value.is_rational:
+                    answer_value = float(answer_value)
+                # Otherwise keep as SymPy object (e.g., sqrt(5) stays sqrt(5))
+            except Exception:
+                # If conversion fails, keep the SymPy object
+                pass
+        except Exception as e:
+            return AnswerReward(
+                answer_generation=answer_generation,
+                extracted_answer=extracted_answer,
+                reward=0.0,
+                error=f"Could not evaluate answer '{extracted_answer}': {e}",
+                feedback=f"The answer must be a valid numeric, boolean, or LaTeX expression.",
+            )
 
     verification_result = verify(
         code=extracted_curriculum, variable_assignment=answer_value
@@ -226,13 +274,14 @@ def reward_answer(
         answer_generation=answer_generation,
         extracted_answer=extracted_answer,
         reward=1.0 if verification_result.correct else 0.0,
+        feedback=verification_result.feedback,
     )
+
 
 async def _reward_answer_async(
     extracted_curriculum: str,
     answer_generation: str,
     format_regex: str,
-    use_last_match: bool,
     variable_name: str,
     check_diversity: bool,
 ) -> AnswerReward:
@@ -241,7 +290,6 @@ async def _reward_answer_async(
         extracted_curriculum=extracted_curriculum,
         answer_generation=answer_generation,
         format_regex=format_regex,
-        use_last_match=use_last_match,
         variable_name=variable_name,
         check_diversity=check_diversity,
     )
@@ -251,7 +299,6 @@ async def reward_answer_group(
     extracted_curriculum: str,
     answer_generations: List[str],
     format_regex: str = STUDENT_PATTERN,
-    use_last_match: bool = True,
     variable_name: str = "x",
     check_diversity: bool = False,
 ) -> List[AnswerReward]:
@@ -268,7 +315,6 @@ async def reward_answer_group(
                         extracted_curriculum=extracted_curriculum,
                         answer_generation=answer_generation,
                         format_regex=format_regex,
-                        use_last_match=use_last_match,
                         variable_name=variable_name,
                         check_diversity=check_diversity,
                     )
@@ -283,6 +329,9 @@ function_reward_curriculum_format_only: Callable[[str], CurriculumReward] = part
     reward_curriculum, format_regex=TEACHER_PATTERN, check_format_only=True
 )
 
-function_reward_answer: Callable[[tuple[str,str]], AnswerReward] = partial(
-    reward_answer, format_regex=STUDENT_PATTERN,  variable_name="x", check_diversity=False
+function_reward_answer: Callable[[tuple[str, str]], AnswerReward] = partial(
+    reward_answer,
+    format_regex=STUDENT_PATTERN,
+    variable_name="x",
+    check_diversity=False,
 )

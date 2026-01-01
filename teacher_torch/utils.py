@@ -29,7 +29,9 @@ except ImportError:
     HAS_COLORLOG = False
 import torch
 import torch._dynamo
+
 torch._dynamo.config.recompile_limit = 16  # Default is 8
+
 
 def setup_logger_with_file_line(
     logger_name: str, level: int = logging.INFO, use_colors: Optional[bool] = None
@@ -92,7 +94,9 @@ def setup_logger_with_file_line(
 
     return logger
 
+
 logger = setup_logger_with_file_line(__name__)
+
 
 def release_memory(vars: list[Any] | None = None):
     if vars:
@@ -103,25 +107,31 @@ def release_memory(vars: list[Any] | None = None):
     torch.cuda.reset_peak_memory_stats()
 
 
-def zero_pad_sequences(sequences: list[torch.Tensor], side: str = "left", pad_value: int = 0) -> torch.Tensor:
+def zero_pad_sequences(
+    sequences: list[torch.Tensor], side: str = "left", pad_value: int = 0
+) -> torch.Tensor:
     """
     Zero pad sequences to the same length.
-    
+
     Args:
         sequences: A list of torch.Tensor objects.
         side: A string that can be either "left" or "right".
         pad_value: The value to use for padding.
-    
+
     Returns:
         A torch.Tensor object with all sequences padded to max length.
     """
     assert side in ("left", "right")
-    max_len = max(seq.size(0) for seq in sequences)  # get the max length of the sequences
+    max_len = max(
+        seq.size(0) for seq in sequences
+    )  # get the max length of the sequences
     padded_sequences = []
     for seq in sequences:
         pad_len = max_len - seq.size(0)  # get the padding length
         padding = (pad_len, 0) if side == "left" else (0, pad_len)  # get the padding
-        padded_sequences.append(torch.nn.functional.pad(seq, padding, value=pad_value))  # pad the sequence
+        padded_sequences.append(
+            torch.nn.functional.pad(seq, padding, value=pad_value)
+        )  # pad the sequence
     return torch.stack(padded_sequences, dim=0)  # stack the padded sequences
 
 
@@ -218,7 +228,6 @@ def load_model_tokenizer(
         dtype=torch.bfloat16 if bf16 and use_cuda else "auto",
         device_map=device_map,
     )
-    # model.forward = torch.compile(model.forward, dynamic=True, mode="max-autotune-no-cudagraphs")
     logger.debug(f"Model loaded on {model.device}")
     logger.debug(f"Model dtype: {model.dtype}")
     logger.debug(f"Model architecture:\n{model}")
@@ -250,20 +259,21 @@ def expand_prompts_for_group(prompts: list[str], group_size: int) -> list[str]:
     """
     return [p for p in prompts for _ in range(group_size)]
 
+
 def split_seed(seed: int) -> int:
     """
     Deterministically derive a new seed from the input seed.
-    
+
     Mimics JAX's jax.random.split() behavior - given the same input seed,
     always produces the same output seed. Useful for advancing the random
     state in a reproducible way.
-    
+
     Args:
         seed: The input seed.
-        
+
     Returns:
         A new seed deterministically derived from the input seed.
-        
+
     Example:
         >>> seed = 42
         >>> seed = split_seed(seed)  # advance to next seed
@@ -273,7 +283,7 @@ def split_seed(seed: int) -> int:
     """
     generator = torch.Generator()
     generator.manual_seed(seed)
-    
+
     new_seed = torch.randint(
         low=0,
         high=2**31 - 1,
@@ -281,5 +291,5 @@ def split_seed(seed: int) -> int:
         generator=generator,
         dtype=torch.int64,
     ).item()
-    
+
     return new_seed

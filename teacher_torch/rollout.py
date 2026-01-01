@@ -22,6 +22,7 @@ from teacher_torch.utils import setup_logger_with_file_line
 
 logger = setup_logger_with_file_line(__name__)
 
+
 @dataclass
 class RolloutConfig:
     """Configuration for rollout behavior.
@@ -30,7 +31,8 @@ class RolloutConfig:
         normalize_advantages: Whether to normalize advantages (mean=0, std=1).
         use_rloo_baseline: Use RLOO baseline (leave-one-out) for variance reduction.
     """
-    seed: int = 42
+
+    seed: Optional[int] = None
     normalize_advantages: bool = True
     use_rloo_baseline: bool = False
 
@@ -174,16 +176,16 @@ def rollout(
 
     # Compute rewards for each completion
     if callable(reward_fn):
-        reward_outputs: list[Type[CurriculumReward | AnswerReward]] = [
+        reward_outputs: list[Type[CurriculumReward]] = [
             reward_fn(completion) for completion in sampling_output.completions
         ]
     elif isinstance(reward_fn, list):
-        reward_outputs = [
-            reward_fn[i](completion) for i, completion in enumerate(sampling_output.completions)
+        reward_outputs: list[Type[CurriculumReward]] = [
+            reward_fn[i // group_size](completion)
+            for i, completion in enumerate(sampling_output.completions)
         ]
     else:
         raise ValueError("reward_fn must be a callable or list of callables")
-
 
     for i, reward_output in enumerate(reward_outputs):
         logger.info(f"\033[35mReward output {i}: \n======\n{str(reward_output)}\033[0m")
@@ -192,9 +194,7 @@ def rollout(
     if any(reward is None for reward in reward_outputs):
         raise ValueError("reward_fn must return a Reward object for each completion")
 
-    rewards: torch.FloatTensor = torch.tensor(
-        rewards, device=model.device
-    )
+    rewards: torch.FloatTensor = torch.tensor(rewards, device=model.device)
     assert rewards.shape == (num_samples,), (
         f"reward_fn must return rewards of shape ({num_samples},), got {rewards.shape}"
     )
@@ -214,7 +214,7 @@ def rollout(
         solved_grouped = solved_mask.view(
             batch_size, group_size
         )  # (batch_size, group_size)
-        solved_mean_per_group = solved_grouped.mean(dim=1)  # (batch_size,)
+        solved_mean_per_group = solved_grouped.float().mean(dim=1)  # (batch_size,)
 
         # Compute learnability
         learnability: torch.FloatTensor = solved_mean_per_group * (
@@ -245,8 +245,10 @@ def rollout(
     # Create appropriate experience based on role
     if role == "student" and source_curriculums is not None:
         # Compute solved_mask for student experiences
-        solved_mask = (rewards >= solved_threshold).bool() if rewards is not None else None
-        
+        solved_mask = (
+            (rewards >= solved_threshold).bool() if rewards is not None else None
+        )
+
         experience = StudentExperienceBuffer.from_sampling_output(
             sampling_output=sampling_output,
             pad_token_id=tokenizer.pad_token_id,
@@ -267,7 +269,9 @@ def rollout(
             action_log_probs_ref=ref_log_probs,
             rewards=rewards,
             only_check_format=only_check_format,
-            curriculums=[reward_output.extracted_curriculum for reward_output in reward_outputs],
+            curriculums=[
+                reward_output.extracted_curriculum for reward_output in reward_outputs
+            ],
         )
 
     return experience, metrics

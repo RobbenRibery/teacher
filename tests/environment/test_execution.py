@@ -33,6 +33,7 @@ def test_verify_failure_simple():
     assert result.error is None
     assert result.feedback is not None
     assert "not satisfied" in result.feedback
+    assert "lambda x: x > 5" in result.feedback
 
 
 def test_verify_complex_logic():
@@ -187,8 +188,8 @@ def test_extract_answer_last_match():
     """)
     result = extract_answer(solver_generation, regex_format)
     assert result is not None
-    assert "x = 1" in result
-    assert "x = 2" not in result
+    assert "x = 2" in result
+    assert "x = 1" not in result
 
 
 def test_extract_answer_no_match():

@@ -12,7 +12,7 @@ from teacher_torch.utils import zero_pad_sequences
 class Experience:
     """
     Base experience class for rollout data.
-    
+
     A 1/2 Dimensional representation of a collection of experiences.
     The first dimension is the batch size, the second dimension is the sequence length.
     """
@@ -23,7 +23,7 @@ class Experience:
 
     sequence_ids: torch.IntTensor  # (group_size, seq_len)
     sequence_attention_mask: torch.IntTensor  # (group_size, seq_len)
-    action_mask: torch.BoolTensor # (group_size, seq_len-1)
+    action_mask: torch.BoolTensor  # (group_size, seq_len-1)
     action_log_probs: torch.FloatTensor  # (group_size, seq_len-1)
     action_log_probs_ref: torch.FloatTensor = None  # (group_size, seq_len-1)
 
@@ -50,32 +50,76 @@ class Experience:
             members[f.name] = v
         return type(self)(**members)
 
+
 @dataclass
 class TeacherExperience(Experience):
     """
     Teacher experience that holds generated curricula.
-    
+
     The completions field holds raw rollout outputs from teacher sampling.
     The curriculums field holds the extracted python programs that are sent to students.
-    
+
     Only TeacherExperience supports format checking via only_check_format and
     correct_formatted_experience.
     """
 
-    curriculums: Optional[list[str | None]] = None  # Extracted curriculum (python programs) from completions
-    only_check_format: bool = True  # Whether this experience is only for format checking
+    curriculums: Optional[list[str | None]] = (
+        None  # Extracted curriculum (python programs) from completions
+    )
+    only_check_format: bool = (
+        True  # Whether this experience is only for format checking
+    )
 
     @property
     def num_curricula(self) -> int:
         return len(self.curriculums) if self.curriculums is not None else 0
 
+    def __getitem__(self, index: int | slice) -> "TeacherExperience":
+        """Get a slice of the experience.
+
+        Args:
+            index: Integer index or slice object.
+
+        Returns:
+            New TeacherExperience with only the selected samples.
+        """
+        if isinstance(index, int):
+            indices = torch.tensor([index])
+        else:
+            indices = torch.arange(self.num_curricula)[index]
+
+        return TeacherExperience(
+            prompt=self.prompt,
+            completions=[self.completions[i] for i in indices.tolist()],
+            pad_token_id=self.pad_token_id,
+            curriculums=[self.curriculums[i] for i in indices.tolist()]
+            if self.curriculums is not None
+            else None,
+            sequence_ids=self.sequence_ids[indices],
+            sequence_attention_mask=self.sequence_attention_mask[indices],
+            action_mask=self.action_mask[indices],
+            action_log_probs=self.action_log_probs[indices],
+            rewards=self.rewards[indices] if self.rewards is not None else None,
+            only_check_format=self.only_check_format,
+            solved_mask=self.solved_mask[indices]
+            if self.solved_mask is not None
+            else None,
+            advantages=self.advantages[indices]
+            if self.advantages is not None
+            else None,
+            action_log_probs_ref=self.action_log_probs_ref[indices]
+            if self.action_log_probs_ref is not None
+            else None,
+            learnability=None,
+        )
+
     @property
     def correct_formatted_experience(self) -> Optional["TeacherExperience"]:
         """Get a filtered experience containing only correctly formatted samples.
-        
+
         This is only applicable when only_check_format is True.
         Filters samples where reward >= 1.0 (indicating correct format).
-        
+
         Returns:
             TeacherExperience with only correctly formatted samples, or None if
             only_check_format is False, rewards is None, or no correct samples exist.
@@ -87,7 +131,7 @@ class TeacherExperience(Experience):
 
         # Get indices where reward >= 1.0
         correct_indices = torch.where(self.rewards >= 1.0)[0]
-        curriculums: list[str] = [self.curriculums[i] for i in correct_indices.tolist()] 
+        curriculums: list[str] = [self.curriculums[i] for i in correct_indices.tolist()]
         if any(curriculum is None for curriculum in curriculums):
             raise ValueError(
                 f"curriculums must not be None for any of the correct indices, got {curriculums}"
@@ -120,64 +164,66 @@ class TeacherExperience(Experience):
 
     def merge(self, other: "TeacherExperience") -> "TeacherExperience":
         """Merge another TeacherExperience into this one, keeping only unique completions.
-        
-        Concatenates lists and tensors, filtering out duplicate completions from the 
+
+        Concatenates lists and tensors, filtering out duplicate completions from the
         other experience. Handles variable sequence lengths by padding to max length.
         Assumes both experiences have the same prompt and pad_token_id.
-        
+
         Args:
             other: Another TeacherExperience to merge.
-            
+
         Returns:
             New TeacherExperience with merged data containing only unique completions.
         """
         # Track seen completions from self
         seen_completions = set[str](self.completions)
         unique_indices_other = []
-        
+
         for idx, completion in enumerate(other.completions):
             if completion not in seen_completions:
                 seen_completions.add(completion)
                 unique_indices_other.append(idx)
-        
+
         # If no unique completions in other, return self unchanged
         if not unique_indices_other:
             return self
-        
+
         # Concatenate lists with only unique completions from other
-        merged_completions = self.completions + [other.completions[i] for i in unique_indices_other]
-        
+        merged_completions = self.completions + [
+            other.completions[i] for i in unique_indices_other
+        ]
+
         merged_curriculums = None
         if self.curriculums is not None and other.curriculums is not None:
-            merged_curriculums = self.curriculums + [other.curriculums[i] for i in unique_indices_other]
+            merged_curriculums = self.curriculums + [
+                other.curriculums[i] for i in unique_indices_other
+            ]
         elif self.curriculums is not None:
             merged_curriculums = self.curriculums
         elif other.curriculums is not None:
             merged_curriculums = [other.curriculums[i] for i in unique_indices_other]
-        
+
         # Helper to pad and concatenate 2D sequence tensors with potentially different lengths
         def pad_and_concat_sequences(
-            self_tensor: torch.Tensor, 
-            other_tensor: torch.Tensor, 
-            pad_value: int
+            self_tensor: torch.Tensor, other_tensor: torch.Tensor, pad_value: int
         ) -> torch.Tensor:
             """Pad sequences to same length and concatenate."""
             self_seq_len = self_tensor.size(1)
             other_seq_len = other_tensor.size(1)
-            
+
             if self_seq_len == other_seq_len:
                 return torch.cat([self_tensor, other_tensor], dim=0)
-            
+
             # Collect all sequences and pad them
             all_sequences = list[Tensor](self_tensor) + list[Tensor](other_tensor)
             return zero_pad_sequences(all_sequences, side="right", pad_value=pad_value)
-        
+
         # Get the unique samples from other
         other_sequence_ids = other.sequence_ids[unique_indices_other]
         other_attention_mask = other.sequence_attention_mask[unique_indices_other]
         other_action_mask = other.action_mask[unique_indices_other]
         other_action_log_probs = other.action_log_probs[unique_indices_other]
-        
+
         # Concatenate tensors with padding for variable-length sequences
         merged_sequence_ids = pad_and_concat_sequences(
             self.sequence_ids, other_sequence_ids, pad_value=self.pad_token_id
@@ -191,43 +237,56 @@ class TeacherExperience(Experience):
         merged_action_log_probs = pad_and_concat_sequences(
             self.action_log_probs, other_action_log_probs, pad_value=0
         )
-        
+
         merged_action_log_probs_ref = None
-        if self.action_log_probs_ref is not None and other.action_log_probs_ref is not None:
-            other_action_log_probs_ref = other.action_log_probs_ref[unique_indices_other]
+        if (
+            self.action_log_probs_ref is not None
+            and other.action_log_probs_ref is not None
+        ):
+            other_action_log_probs_ref = other.action_log_probs_ref[
+                unique_indices_other
+            ]
             merged_action_log_probs_ref = pad_and_concat_sequences(
                 self.action_log_probs_ref, other_action_log_probs_ref, pad_value=0
             )
         elif self.action_log_probs_ref is not None:
             merged_action_log_probs_ref = self.action_log_probs_ref
         elif other.action_log_probs_ref is not None:
-            merged_action_log_probs_ref = other.action_log_probs_ref[unique_indices_other]
-        
+            merged_action_log_probs_ref = other.action_log_probs_ref[
+                unique_indices_other
+            ]
+
         # 1D tensors (rewards, solved_mask, advantages) don't need padding
         merged_rewards = None
         if self.rewards is not None and other.rewards is not None:
-            merged_rewards = torch.cat([self.rewards, other.rewards[unique_indices_other]]).reshape(-1)
+            merged_rewards = torch.cat(
+                [self.rewards, other.rewards[unique_indices_other]]
+            ).reshape(-1)
         elif self.rewards is not None:
             merged_rewards = self.rewards
         elif other.rewards is not None:
             merged_rewards = other.rewards[unique_indices_other]
-            
+
         merged_solved_mask = None
         if self.solved_mask is not None and other.solved_mask is not None:
-            merged_solved_mask = torch.cat([self.solved_mask, other.solved_mask[unique_indices_other]]).reshape(-1)
+            merged_solved_mask = torch.cat(
+                [self.solved_mask, other.solved_mask[unique_indices_other]]
+            ).reshape(-1)
         elif self.solved_mask is not None:
             merged_solved_mask = self.solved_mask
         elif other.solved_mask is not None:
             merged_solved_mask = other.solved_mask[unique_indices_other]
-            
+
         merged_advantages = None
         if self.advantages is not None and other.advantages is not None:
-            merged_advantages = torch.cat([self.advantages, other.advantages[unique_indices_other]]).reshape(-1)
+            merged_advantages = torch.cat(
+                [self.advantages, other.advantages[unique_indices_other]]
+            ).reshape(-1)
         elif self.advantages is not None:
             merged_advantages = self.advantages
         elif other.advantages is not None:
             merged_advantages = other.advantages[unique_indices_other]
-        
+
         return TeacherExperience(
             prompt=self.prompt,
             completions=merged_completions,
@@ -287,7 +346,9 @@ class TeacherExperience(Experience):
 
         # Recompute advantages based on new rewards
         if normalize_advantages and len(self.curriculums) > 1:
-            self.advantages = (new_rewards - new_rewards.mean()) / (new_rewards.std() + 1e-8)
+            self.advantages = (new_rewards - new_rewards.mean()) / (
+                new_rewards.std() + 1e-8
+            )
         else:
             self.advantages = new_rewards - new_rewards.mean()
 
@@ -304,7 +365,7 @@ class TeacherExperience(Experience):
     ) -> Self:
         """
         Create a TeacherExperience from a SamplingOutput.
-        
+
         Assumes batch_size = 1 (single prompt).
 
         Args:
@@ -363,17 +424,18 @@ class TeacherExperience(Experience):
 
     def to_dict(self) -> dict:
         """Convert TeacherExperience to a JSON-serializable dictionary.
-        
+
         Converts torch tensors to nested lists for JSON serialization.
-        
+
         Returns:
             Dictionary that can be serialized to JSON.
         """
+
         def tensor_to_list(t: torch.Tensor | None) -> list | None:
             if t is None:
                 return None
             return t.tolist()
-        
+
         return {
             "prompt": self.prompt,
             "completions": self.completions,
@@ -394,20 +456,21 @@ class TeacherExperience(Experience):
     @classmethod
     def from_dict(cls, data: dict) -> TeacherExperience:
         """Create TeacherExperience from a dictionary.
-        
+
         Converts nested lists back to torch tensors.
-        
+
         Args:
             data: Dictionary containing TeacherExperience data.
-            
+
         Returns:
             TeacherExperience instance.
         """
+
         def list_to_tensor(l: list | None, dtype: torch.dtype) -> torch.Tensor | None:
             if l is None:
                 return None
             return torch.tensor(l, dtype=dtype)
-        
+
         return cls(
             prompt=data["prompt"],
             completions=data["completions"],
@@ -415,15 +478,20 @@ class TeacherExperience(Experience):
             pad_token_id=data["pad_token_id"],
             only_check_format=data.get("only_check_format", True),
             sequence_ids=list_to_tensor(data.get("sequence_ids"), torch.int),
-            sequence_attention_mask=list_to_tensor(data.get("sequence_attention_mask"), torch.int),
+            sequence_attention_mask=list_to_tensor(
+                data.get("sequence_attention_mask"), torch.int
+            ),
             action_mask=list_to_tensor(data.get("action_mask"), torch.bool),
             action_log_probs=list_to_tensor(data.get("action_log_probs"), torch.float),
-            action_log_probs_ref=list_to_tensor(data.get("action_log_probs_ref"), torch.float),
+            action_log_probs_ref=list_to_tensor(
+                data.get("action_log_probs_ref"), torch.float
+            ),
             rewards=list_to_tensor(data.get("rewards"), torch.float),
             solved_mask=list_to_tensor(data.get("solved_mask"), torch.bool),
             advantages=list_to_tensor(data.get("advantages"), torch.float),
             learnability=data.get("learnability"),
         )
+
 
 @dataclass
 class StudentExperience(Experience):
@@ -434,7 +502,9 @@ class StudentExperience(Experience):
     that was used to generate this student's problem prompt.
     """
 
-    source_curriculum: Optional[str] = None  # The curriculum this student experience originated from
+    source_curriculum: Optional[str] = (
+        None  # The curriculum this student experience originated from
+    )
 
     @property
     def solved_rate(self) -> float:
@@ -446,6 +516,7 @@ class StudentExperience(Experience):
         if self.solved_mask is None:
             return 0.0
         return self.solved_mask.float().mean().item()
+
 
 @dataclass
 class StudentExperienceBuffer:
@@ -523,7 +594,9 @@ class StudentExperienceBuffer:
         pad_token_id: int,
         action_log_probs: torch.FloatTensor,
         source_curriculums: list[str],
-        action_log_probs_ref: Optional[torch.FloatTensor] = None, # (num_samples, seq_len-1)
+        action_log_probs_ref: Optional[
+            torch.FloatTensor
+        ] = None,  # (num_samples, seq_len-1)
         rewards: Optional[torch.FloatTensor] = None,
         advantages: Optional[torch.FloatTensor] = None,
         solved_mask: Optional[torch.BoolTensor] = None,
@@ -583,9 +656,9 @@ class StudentExperienceBuffer:
                     f"advantages.shape[0] ({advantages.shape[0]}) must equal num_samples ({num_samples})"
                 )
         if learnability is not None:
-            if learnability.shape[0] != num_samples:
+            if learnability.shape[0] != batch_size:
                 raise ValueError(
-                    f"learnability.shape[0] ({learnability.shape[0]}) must equal num_samples ({num_samples})"
+                    f"learnability.shape[0] ({learnability.shape[0]}) must equal batch_size ({batch_size})"
                 )
 
         experiences: list[StudentExperience] = []

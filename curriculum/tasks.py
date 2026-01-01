@@ -49,12 +49,12 @@ class BooleanConstraintsSatisfaction(Task):
         """
     ### Guideline
     - Put your final designed problem inside exactly 1 ```python\n...\n``` block and don't include solutions or hints.
-    - Copy the commented line "# Reason step by step and derive the value of x." inside the python code block.
+    - Copy the commented line "# Reason step by step and derive the final value of x." inside the python code block.
     - End right after the python code block.
 
     ### Example final section of the response
     ```python
-    # Reason step by step and derive the value of x。
+    # Reason step by step and derive the final value of x.
     constraints = [
         lambda x: ...,
         lambda x: ...,

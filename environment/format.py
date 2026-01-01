@@ -28,10 +28,10 @@ from typing import Optional
 #   - Captured code content (group 1)
 #   - \n``` at the END of completion (required)
 TEACHER_PATTERN = (
-    r"^<think>.*?</think>\s*"      # Mandatory thinking block at start
-    r"```python\n"                  # Python code fence opening
-    r"(.*?)"                        # Captured code content (non-greedy)
-    r"\n```$"                       # \n``` MUST be at END of completion (no trailing whitespace)
+    r"^<think>.*?</think>\s*"  # Mandatory thinking block at start
+    r"```python\n"  # Python code fence opening
+    r"(.*?)"  # Captured code content (non-greedy)
+    r"\n```$"  # \n``` MUST be at END of completion (no trailing whitespace)
 )
 
 # Student output format - thinking followed by answer in \boxed{}
@@ -42,10 +42,10 @@ TEACHER_PATTERN = (
 #   - The unique \boxed{...} (group 1)
 #   - Text that does NOT contain any other \boxed{ until the end
 STUDENT_PATTERN = (
-    r"^<think>.*?</think>"          # Mandatory thinking block at start
-    r"(?:(?!\\boxed\{).)*"          # No other boxes allowed before the answer
-    r"\\boxed\{([^}]*)\}"           # The answer box
-    r"\s*$"                         # MUST be the end of the string (only whitespace allowed)
+    r"^<think>.*?</think>"  # Mandatory thinking block at start
+    r".*"  # Allow any strings before the box
+    r"\\boxed\{(.+)\}"  # The answer box (captures the last one, allowing nested braces)
+    r".*$"  # Allow any strings after the box
 )
 
 # Simpler pattern that only matches the code block (no thinking required)
@@ -60,6 +60,7 @@ ANSWER_FORMAT_REGEX = TEACHER_PATTERN
 # Extraction Utilities
 # =============================================================================
 
+
 def extract_format(text: str, regex_format: str) -> Optional[str]:
     """
     Extract content from text using a regex pattern.
@@ -68,24 +69,20 @@ def extract_format(text: str, regex_format: str) -> Optional[str]:
         text: Text to extract from.
         regex_format: Regex pattern with at least one capture group for the content.
     Returns:
-        Return the match inside the code block. 
+        Return the match inside the code block.
     """
     matches = list[Match[str]](re.finditer(regex_format, text, re.DOTALL))
     if matches:
-        match = matches[0]
+        match = matches[-1]
         if match.groups():
             return match.group(1)
-        return match.group(0)   
+        return match.group(0)
     return None
 
 
 # Convenience functions using role-specific patterns
-extract_teacher_code = partial(
-    extract_format, regex_format=TEACHER_PATTERN
-)
-extract_student_answer = partial(
-    extract_format, regex_format=STUDENT_PATTERN
-)
+extract_teacher_code = partial(extract_format, regex_format=TEACHER_PATTERN)
+extract_student_answer = partial(extract_format, regex_format=STUDENT_PATTERN)
 
 # Legacy alias
 extract_student_code = extract_student_answer

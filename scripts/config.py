@@ -11,6 +11,7 @@ from teacher_torch.configs import (
     StudentGenerationConfig,
 )
 
+
 def _default_teacher_gen_config(seed: int = 42) -> TeacherGenerationConfig:
     """Create default teacher generation config."""
     return TeacherGenerationConfig(
@@ -55,20 +56,20 @@ def _default_config() -> GRPOTrainingConfig:
 @dataclass
 class ConfigArgs:
     """Command-line arguments wrapper for GRPO training configuration.
-    
+
     Uses tyro's nested config support to parse GRPOTrainingConfig directly.
     """
+
     config: GRPOTrainingConfig = field(default_factory=_default_config)
 
 
 def parse_args() -> GRPOTrainingConfig:
     """Parse command-line arguments and return GRPOTrainingConfig and seed.
-    
+
     Uses tyro's nested config support to parse GRPOTrainingConfig directly.
-    
+
     Returns:
         Tuple of (GRPOTrainingConfig instance, seed value).
     """
     args = tyro.cli(ConfigArgs)
     return args.config
-

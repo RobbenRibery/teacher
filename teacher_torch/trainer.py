@@ -28,10 +28,10 @@ from teacher_torch.rollout import rollout, RolloutMetric, RolloutConfig
 from teacher_torch.sampling import SamplingOutput
 from teacher_torch.utils import (
     setup_logger_with_file_line,
-    load_model_tokenizer, 
+    load_model_tokenizer,
     split_seed,
 )
-from teacher_torch.policy_gradient import update 
+from teacher_torch.policy_gradient import update
 from teacher_torch.configs import (
     GRPOTrainingConfig,
     TrainingMetrics,
@@ -44,7 +44,9 @@ from curriculum.tasks import BooleanConstraintsSatisfaction
 
 import wandb
 from pathlib import Path
+
 logger = setup_logger_with_file_line(__name__)
+
 
 @dataclass
 class RunnerMetrics:
@@ -152,14 +154,14 @@ class GRPOTrainer:
         self.model, self.tokenizer = load_model_tokenizer(
             train_config.mode_name_or_path,
             device_map="auto" if torch.cuda.is_available() else None,
-            #chat_template_path="template_lm_studio.jinja",
+            # chat_template_path="template_lm_studio.jinja",
         )
 
         # Create frozen reference model for KL regularization
         self.ref_model, _ = load_model_tokenizer(
             train_config.mode_name_or_path,
             device_map="auto" if torch.cuda.is_available() else None,
-            #chat_template_path="template_lm_studio.jinja",
+            # chat_template_path="template_lm_studio.jinja",
         )
         for param in self.ref_model.parameters():
             param.requires_grad = False
@@ -220,7 +222,7 @@ class GRPOTrainer:
     def rollout_teacher(
         self,
         teacher_reward_fn: Callable[[str], CurriculumReward],
-        output_dir: Optional[Path] = None,  
+        output_dir: Optional[Path] = None,
     ) -> tuple[TeacherExperience, RolloutMetric]:
         """Execute teacher rollout phase.
 
@@ -250,7 +252,9 @@ class GRPOTrainer:
                 model=self.model,
                 tokenizer=self.tokenizer,
                 prompts=prompts,
-                generation_config=GenerationConfig(**self.teacher_generation_config.to_dict()),
+                generation_config=GenerationConfig(
+                    **self.teacher_generation_config.to_dict()
+                ),
                 rollout_config=rollout_config,
                 role="teacher",
                 solved_threshold=self.train_config.solved_threshold,
@@ -275,12 +279,16 @@ class GRPOTrainer:
 
         for idx in range(max_attempts):
             num_curricula = curated.num_curricula if curated is not None else 0
-            logger.info(f"========= Rolling out teacher... {idx + 1}/{max_attempts} | Accumulating {num_curricula}/{min_legit} curricula ==========")
+            logger.info(
+                f"========= Rolling out teacher... {idx + 1}/{max_attempts} | Accumulating {num_curricula}/{min_legit} curricula =========="
+            )
             experience, metrics = do_rollout(seed=current_seed)
 
             correct_formatted_experience = experience.correct_formatted_experience
-            logger.info(f"Number of correctly formatted curricula: {correct_formatted_experience.num_curricula if correct_formatted_experience is not None else 0}")
-            
+            logger.info(
+                f"Number of correctly formatted curricula: {correct_formatted_experience.num_curricula if correct_formatted_experience is not None else 0}"
+            )
+
             # Update seed for next iteration
             current_seed = split_seed(current_seed)
 
@@ -291,20 +299,30 @@ class GRPOTrainer:
                     curated = curated.merge(correct_formatted_experience)
 
                 if curated is not None:
-                    logger.info(f"Number of curricula after merging: {curated.num_curricula}")
+                    logger.info(
+                        f"Number of curricula after merging: {curated.num_curricula}"
+                    )
                     if curated.num_curricula >= min_legit:
+                        # Truncate to exactly min_legit if we overshot
+                        if curated.num_curricula > min_legit:
+                            curated = curated[:min_legit]
+                            logger.info(f"Truncated to {min_legit} curricula")
                         break
 
         # Save final seed back to config for subsequent calls
         self.teacher_generation_config.seed = current_seed
         output_exp = curated or experience
 
+        if min_legit > 0 and output_exp.num_curricula > min_legit:
+            output_exp = output_exp[:min_legit]
+            logger.info(f"Final teacher experience truncated to {min_legit} curricula")
+
         return output_exp, metrics
 
     def rollout_student(
         self,
         curriculums: list[str],
-        student_reward_fn: Callable[[tuple[str,str]], AnswerReward],
+        student_reward_fn: Callable[[tuple[str, str]], AnswerReward],
         output_dir: Optional[Path] = None,
     ) -> tuple[StudentExperienceBuffer, RolloutMetric]:
         """Execute student rollout phase.
@@ -323,7 +341,7 @@ class GRPOTrainer:
         """
         if not student_reward_fn:
             raise ValueError("Student reward function is required")
-        
+
         # Create rollout config
         rollout_config = RolloutConfig(
             seed=self.student_generation_config.seed,
@@ -334,19 +352,28 @@ class GRPOTrainer:
         # Use mini_batch_size from config or default to 4
         rollout_batch_size = self.train_config.student_rollout_batch_size
         total_curriculums = len(curriculums)
-        
+
         all_buffer = StudentExperienceBuffer()
         total_entropy_sum = 0.0
         total_samples = 0
-        
-        logger.info(f"Starting student rollout for {total_curriculums} curriculums in batches of {rollout_batch_size}")
+
+        logger.info(
+            f"Starting student rollout for {total_curriculums} curriculums in batches of {rollout_batch_size}"
+        )
 
         for i in range(0, total_curriculums, rollout_batch_size):
             batch_curriculums = curriculums[i : i + rollout_batch_size]
-            logger.info(f"Processing student rollout batch {i//rollout_batch_size + 1}/{(total_curriculums + rollout_batch_size - 1)//rollout_batch_size} ({len(batch_curriculums)} items)")
-            
+            if any(c is None for c in batch_curriculums):
+                raise ValueError("None in batch_curriculums")
+
+            logger.info(
+                f"Processing student rollout batch {i // rollout_batch_size + 1}/{(total_curriculums + rollout_batch_size - 1) // rollout_batch_size} ({len(batch_curriculums)} items)"
+            )
+
             # Format prompts for student (apply chat template)
-            formatted_prompts = [self._build_student_prompt(c) for c in batch_curriculums]
+            formatted_prompts = [
+                self._build_student_prompt(c) for c in batch_curriculums
+            ]
 
             # Generate answers with source_curriculums for tracking
             # Pass output_dir=None to avoid overwriting files or creating flat list
@@ -355,40 +382,45 @@ class GRPOTrainer:
                 model=self.model,
                 tokenizer=self.tokenizer,
                 prompts=formatted_prompts,
-                generation_config=GenerationConfig(**self.student_generation_config.to_dict()),
+                generation_config=GenerationConfig(
+                    **self.student_generation_config.to_dict()
+                ),
                 rollout_config=rollout_config,
                 role="student",
                 solved_threshold=self.train_config.solved_threshold,
                 reward_fn=[
-                    lambda completion, c=c: student_reward_fn(extracted_curriculum=c, answer_generation=completion)
+                    lambda completion: partial(
+                        student_reward_fn, extracted_curriculum=c
+                    )(answer_generation=completion)
                     for c in batch_curriculums
                 ],
                 logits_minibatch_size=self.train_config.logits_minibatch_size,
                 only_check_format=False,
                 source_curriculums=batch_curriculums,
                 ref_model=self.ref_model,
-                output_dir=output_dir / f"rollout_batch_{i}"
+                output_dir=output_dir / f"rollout_batch_{i}",
             )
-            
+            # Update seed for next time
+            self.student_generation_config.seed = split_seed(
+                self.student_generation_config.seed
+            )
+
             # Accumulate results
             all_buffer.extend(batch_result)
             total_entropy_sum += batch_metrics.mean_entropy * batch_metrics.num_samples
             total_samples += batch_metrics.num_samples
-            
+
             # Clear CUDA cache after each batch to free up memory
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        # Update seed for next time
-        self.student_generation_config.seed = split_seed(self.student_generation_config.seed)
-        
         # Recompute aggregate metrics from the full buffer
         all_rewards = []
         all_completion_lens = []
         all_solved = []
         all_learnability = []
         all_advantages = []
-        
+
         for exp in all_buffer.experiences:
             if exp.rewards is not None:
                 all_rewards.append(exp.rewards)
@@ -400,30 +432,44 @@ class GRPOTrainer:
                 all_learnability.append(exp.learnability)
             if exp.advantages is not None:
                 all_advantages.append(exp.advantages)
-        
+
         # Helper to compute mean/std safely
         def safe_mean(tensors):
-            if not tensors: return 0.0
-            cat = torch.cat(tensors) if isinstance(tensors[0], torch.Tensor) else torch.tensor(tensors)
+            if not tensors:
+                return 0.0
+            cat = (
+                torch.cat(tensors)
+                if isinstance(tensors[0], torch.Tensor)
+                else torch.tensor(tensors)
+            )
             return cat.mean().item()
-            
+
         def safe_std(tensors):
-            if not tensors: return 0.0
-            cat = torch.cat(tensors) if isinstance(tensors[0], torch.Tensor) else torch.tensor(tensors)
+            if not tensors:
+                return 0.0
+            cat = (
+                torch.cat(tensors)
+                if isinstance(tensors[0], torch.Tensor)
+                else torch.tensor(tensors)
+            )
             if cat.numel() > 1:
                 return cat.std().item()
             return 0.0
-            
+
         # Reconstruct aggregated metrics
         final_metrics = RolloutMetric(
             num_samples=total_samples,
-            group_size=self.student_generation_config.student_group_size, # Assuming constant group size
-            mean_entropy=total_entropy_sum / total_samples if total_samples > 0 else 0.0,
+            group_size=self.student_generation_config.student_group_size,  # Assuming constant group size
+            mean_entropy=total_entropy_sum / total_samples
+            if total_samples > 0
+            else 0.0,
             mean_completion_len=safe_mean(all_completion_lens),
             mean_reward=safe_mean(all_rewards),
             std_reward=safe_std(all_rewards),
             mean_solved_rate=safe_mean(all_solved),
-            mean_learnability=safe_mean(all_learnability) if isinstance(all_learnability, list) else 0.0, # learnability is scalar per group? Exp has it as scalar or tensor?
+            mean_learnability=safe_mean(all_learnability)
+            if isinstance(all_learnability, list)
+            else 0.0,  # learnability is scalar per group? Exp has it as scalar or tensor?
             # StudentExperience has learnability as Optional[float].
             # So all_learnability is list[float].
             # Actually StudentExperience definition: learnability: Optional[float] = None
@@ -461,7 +507,7 @@ class GRPOTrainer:
         )
 
         # Step 2: Update using student experience
-        student_metrics:TrainingMetrics = update(
+        student_metrics: TrainingMetrics = update(
             model=self.model,
             optimizer=self.optimizer,
             experience=student_exps,
@@ -470,7 +516,7 @@ class GRPOTrainer:
         )
 
         # Step 3: Update using teacher experience (with updated rewards)
-        teacher_metrics:TrainingMetrics = update(
+        teacher_metrics: TrainingMetrics = update(
             model=self.model,
             optimizer=self.optimizer,
             experience=teacher_exp,
@@ -527,7 +573,9 @@ class GRPOTrainer:
         all_metrics: list[RunnerMetrics] = []
 
         for step in range(self.train_config.num_training_steps):
-            logger.info(f"\n=== Step {step + 1}/{self.train_config.num_training_steps} ===")
+            logger.info(
+                f"\n=== Step {step + 1}/{self.train_config.num_training_steps} ==="
+            )
 
             # Phase 1: Teacher generates curricula
             logger.info("Teacher generating curricula...")
@@ -536,7 +584,9 @@ class GRPOTrainer:
             )
 
             if teacher_exp.curriculums is None:
-                logger.warning("Teacher failed to generate valid curricula. Skipping step.")
+                logger.warning(
+                    "Teacher failed to generate valid curricula. Skipping step."
+                )
                 continue
 
             # Phase 2: Student solves curricula
@@ -548,7 +598,7 @@ class GRPOTrainer:
 
             # Phase 3: GRPO optimization
             logger.info("Updating model weights...")
-            train_metrics:dict[str, float] = self.train_step(
+            train_metrics: dict[str, float] = self.train_step(
                 teacher_exp=teacher_exp,
                 student_exps=student_exps,
             )

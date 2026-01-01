@@ -85,9 +85,9 @@ class StudentPrompt(PromptTemplate):
 
     system: str = Field(
         default=dedent(
-        """
+            """
         You are an exceptionally skilled reasoner who can solve problems step by step.
-        You should end your response with "The answer is \\boxed{value}" where value is your final answer.
+        The final line of your response should be "The answer is \\boxed{value}" where value is your final answer.
         """
         ).strip(),
         description="The system prompt for the student.",

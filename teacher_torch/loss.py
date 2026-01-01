@@ -297,6 +297,7 @@ def _sequence_log_probs_from_logits(
     else:
         return log_probs, None
 
+
 # Removed @torch.compile(dynamic=True) to avoid Inductor OOMs on large buffers
 def sequences_log_probs(
     model: PreTrainedModel,
@@ -363,8 +364,10 @@ def sequences_log_probs(
         # Compute log probs for current model
         # logits: [batch_size * num_rollouts, seq_len, vocab_size]
         log_probs, entropy = _sequence_log_probs_from_logits(
-            logits=mini_logits[:, :-1],#.clone(),
-            output_ids=mini_ids[:, 1:],  # right shift 1 block to get the actual output ids
+            logits=mini_logits[:, :-1],  # .clone(),
+            output_ids=mini_ids[
+                :, 1:
+            ],  # right shift 1 block to get the actual output ids
             return_entropy=return_entropy,
         )
         del mini_logits
@@ -373,30 +376,34 @@ def sequences_log_probs(
         # Compute log probs for reference model (no entropy needed)
         if ref_mini_logits is not None:
             ref_log_probs, _ = _sequence_log_probs_from_logits(
-                logits=ref_mini_logits[:, :-1],#.clone(),
+                logits=ref_mini_logits[:, :-1],  # .clone(),
                 output_ids=mini_ids[:, 1:],
                 return_entropy=False,
             )
             del ref_mini_logits
-    
+
         token_logprobs.append(log_probs)
         if return_entropy:
             token_entropy.append(entropy)
-        
+
         if ref_log_probs is not None:
             ref_token_logprobs.append(ref_log_probs)
-        
+
         release_memory(vars=[mini_ids])
-    
+
     reconstructed_logprobs = torch.cat(token_logprobs, dim=0)
     reconstructed_entropy = torch.cat(token_entropy, dim=0) if return_entropy else None
-    reconstructed_ref_logprobs = torch.cat(ref_token_logprobs, dim=0) if ref_model is not None else None
-    
+    reconstructed_ref_logprobs = (
+        torch.cat(ref_token_logprobs, dim=0) if ref_model is not None else None
+    )
+
     logger.info(f"Reconstructed logprobs shape: {reconstructed_logprobs.shape}")
     logger.info(
         f"Reconstructed entropy shape: {reconstructed_entropy.shape if reconstructed_entropy is not None else None}"
     )
     if reconstructed_ref_logprobs is not None:
-        logger.info(f"Reconstructed ref_logprobs shape: {reconstructed_ref_logprobs.shape}")
-    
+        logger.info(
+            f"Reconstructed ref_logprobs shape: {reconstructed_ref_logprobs.shape}"
+        )
+
     return reconstructed_logprobs, reconstructed_entropy, reconstructed_ref_logprobs

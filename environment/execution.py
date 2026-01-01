@@ -4,6 +4,7 @@ import random
 import itertools
 import collections
 import signal
+import ast
 from contextlib import contextmanager
 from typing import Any, Optional, Callable
 from pydantic import BaseModel, Field
@@ -13,6 +14,11 @@ try:
     import numpy as np
 except ImportError:
     np = None
+
+try:
+    import sympy
+except ImportError:
+    sympy = None
 
 
 class TimeoutException(Exception):
@@ -40,6 +46,7 @@ def time_limit(seconds: int):
 def get_exec_globals():
     """
     Returns a dictionary of safe/common globals to be available in exec.
+    Includes standard math libraries and sympy for symbolic computation.
     """
     g = {
         "math": math,
@@ -50,6 +57,17 @@ def get_exec_globals():
     if np:
         g["np"] = np
         g["numpy"] = np
+    if sympy:
+        g["sympy"] = sympy
+        # Add commonly used sympy functions directly for convenience
+        g["sqrt"] = sympy.sqrt
+        g["Rational"] = sympy.Rational
+        g["simplify"] = sympy.simplify
+        g["N"] = sympy.N  # Numerical evaluation
+        g["pi"] = sympy.pi
+        g["E"] = sympy.E
+        g["oo"] = sympy.oo  # Infinity
+        g["I"] = sympy.I  # Imaginary unit
     return g
 
 
@@ -76,7 +94,7 @@ class ExecutionResult(BaseModel):
     error: Optional[str] = Field(None, description="Traceback if the execution failed.")
 
 
-def verify(code: str, variable_assignment: Any) -> VerificationResult:
+def verify(code: str, variable_assignment: float | bool | int) -> VerificationResult:
     """
     Validate that the curriculum is runnable by assigning variable name to a particular value.
     The curriculum should define a list of constraints (lambdas), e.g.:
@@ -103,6 +121,22 @@ def verify(code: str, variable_assignment: Any) -> VerificationResult:
                 correct=False, error="Curriculum must define a 'constraints' list."
             )
 
+        # Extract source code for each constraint if possible
+        constraint_sources = []
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name) and target.id == "constraints":
+                            if isinstance(node.value, ast.List):
+                                constraint_sources = [
+                                    ast.get_source_segment(code, elt)
+                                    for elt in node.value.elts
+                                ]
+        except Exception:
+            pass
+
         # Check that all constraints use 'x' as the variable name
         for constraint in constraints:
             if hasattr(constraint, "__code__"):
@@ -118,14 +152,19 @@ def verify(code: str, variable_assignment: Any) -> VerificationResult:
                     )
 
         satisfied_constraints: list[Callable] = []
-        for _, constraint in enumerate(constraints):
+        for i, constraint in enumerate(constraints):
             try:
                 with time_limit(30):
                     if not constraint(variable_assignment):
+                        constraint_text = (
+                            constraint_sources[i]
+                            if i < len(constraint_sources)
+                            else str(constraint)
+                        )
                         return VerificationResult(
                             correct=False,
                             error=None,
-                            feedback=f"Constraint {constraint} is not satisfied.",
+                            feedback=f"[Wrong Answer] Constraint {constraint_text} is not satisfied.",
                         )
                     else:
                         satisfied_constraints.append(constraint)
@@ -138,7 +177,9 @@ def verify(code: str, variable_assignment: Any) -> VerificationResult:
                 return VerificationResult(correct=False, error=traceback.format_exc())
 
         return VerificationResult(
-            correct=True, error=None, feedback=f"All constraints are satisfied."
+            correct=True,
+            error=None,
+            feedback=f"[Correct Answer] All constraints are satisfied.",
         )
 
     except TimeoutException:

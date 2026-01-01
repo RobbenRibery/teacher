@@ -21,6 +21,7 @@ dependencies = [
     "wandb",
     "rich",
     "ruff>=0.14.10",
+    "math-verify>=0.8.0",
 ]
 
 [project.optional-dependencies]
